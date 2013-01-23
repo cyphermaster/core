@@ -30,8 +30,8 @@
 
 struct Policy_
 {
-    Bundle *bundles;
-    Body *bodies;
+    Seq *bundles;
+    Seq *bodies;
     char *current_namespace;
 };
 
@@ -60,7 +60,7 @@ typedef struct
 PolicyError *PolicyErrorNew(PolicyElementType type, const void *subject, const char *error_msg, ...);
 void PolicyErrorDestroy(PolicyError *error);
 void PolicyErrorWrite(Writer *writer, const PolicyError *error);
-bool PolicyCheck(const Policy *policy, Sequence *errors);
+bool PolicyCheck(const Policy *policy, Seq *errors);
 void PolicySetNameSpace(Policy *policy, char *namespace);
 char *CurrentNameSpace(Policy *policy);
 
@@ -68,7 +68,6 @@ Bundle *AppendBundle(Policy *policy, const char *name, const char *type, Rlist *
 Body *AppendBody(Policy *policy, const char *name, const char *type, Rlist *args, const char *source_path);
 SubType *AppendSubType(Bundle *bundle, char *typename);
 Promise *AppendPromise(SubType *type, char *promiser, Rval promisee, char *classes, char *bundle, char *bundletype, char *namespace);
-void DeleteBundles(Bundle *bp);
 void DeleteBodies(Body *bp);
 void DeletePromise(Promise *pp);
 void DeletePromises(Promise *pp);

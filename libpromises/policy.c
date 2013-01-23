@@ -51,10 +51,18 @@ static const char *POLICY_ERROR_SUBTYPE_INVALID = "%s is not a valid type catego
 
 //************************************************************************
 
+static void BundleDestroy(Bundle *bundle);
+static void BodyDestroy(Body *body);
+
 Policy *PolicyNew(void)
 {
     Policy *policy = xcalloc(1, sizeof(Policy));
+
     policy->current_namespace = xstrdup("default");
+
+    policy->bundles = SeqNew(100, BundleDestroy);
+    policy->bodies = SeqNew(100, BodyDestroy);
+
     return policy;
 }
 
@@ -64,8 +72,9 @@ void PolicyDestroy(Policy *policy)
 {
     if (policy)
     {
-        DeleteBundles(policy->bundles);
-        DeleteBodies(policy->bodies);
+        SeqDestroy(policy->bundles);
+        SeqDestroy(policy->bodies);
+
         free(policy->current_namespace);
         free(policy);
     }
@@ -124,20 +133,23 @@ char *BundleQualifiedName(const Bundle *bundle)
 
 /*************************************************************************/
 
-static bool PolicyCheckPromiseVars(const Promise *pp, Sequence *errors)
+static bool PolicyCheckPromiseVars(const Promise *pp, Seq *errors)
 {
     bool success = true;
 
     // ensure variables are declared with only one type.
     {
         char *data_type = NULL;
-        for (const Constraint *cp = pp->conlist; cp; cp = cp->next)
+
+        for (size_t i = 0; i < SeqLength(pp->conlist); i++)
         {
+            Constraint *cp = SeqAt(pp->conlist, i);
+
             if (IsDataType(cp->lval))
             {
                 if (data_type != NULL)
                 {
-                    SequenceAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_CONSTRAINT, cp,
+                    SeqAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_CONSTRAINT, cp,
                                                           POLICY_ERROR_VARS_CONSTRAINT_DUPLICATE_TYPE,
                                                           data_type, cp->lval));
                     success = false;
@@ -152,12 +164,14 @@ static bool PolicyCheckPromiseVars(const Promise *pp, Sequence *errors)
 
 /*************************************************************************/
 
-static bool PolicyCheckPromiseMethods(const Promise *pp, Sequence *errors)
+static bool PolicyCheckPromiseMethods(const Promise *pp, Seq *errors)
 {
     bool success = true;
 
-    for (const Constraint *cp = pp->conlist; cp; cp = cp->next)
+    for (size_t i = 0; i < SeqLength(pp->conlist); i++)
     {
+        const Constraint *cp = SeqAt(pp->conlist, i);
+
         // ensure: if call and callee are resolved, then they have matching arity
         if (StringSafeEqual(cp->lval, "usebundle"))
         {
@@ -170,7 +184,7 @@ static bool PolicyCheckPromiseMethods(const Promise *pp, Sequence *errors)
                 {
                     if (RlistLen(call->args) != RlistLen(callee->args))
                     {
-                        SequenceAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_CONSTRAINT, cp,
+                        SeqAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_CONSTRAINT, cp,
                                                               POLICY_ERROR_METHODS_BUNDLE_ARITY,
                                                               call->name, RlistLen(callee->args), RlistLen(call->args)));
                         success = false;
@@ -185,7 +199,7 @@ static bool PolicyCheckPromiseMethods(const Promise *pp, Sequence *errors)
 
 /*************************************************************************/
 
-bool PolicyCheckPromise(const Promise *pp, Sequence *errors)
+bool PolicyCheckPromise(const Promise *pp, Seq *errors)
 {
     bool success = true;
 
@@ -203,7 +217,7 @@ bool PolicyCheckPromise(const Promise *pp, Sequence *errors)
 
 /*************************************************************************/
 
-static bool PolicyCheckSubType(const SubType *subtype, Sequence *errors)
+static bool PolicyCheckSubType(const SubType *subtype, Seq *errors)
 {
     assert(subtype);
     assert(subtype->parent_bundle);
@@ -215,7 +229,7 @@ static bool PolicyCheckSubType(const SubType *subtype, Sequence *errors)
     // FIX: if you are able to write a unit test for this error, please do
     if (!subtype->name)
     {
-        SequenceAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_SUBTYPE, subtype,
+        SeqAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_SUBTYPE, subtype,
                                               POLICY_ERROR_SUBTYPE_MISSING_NAME,
                                               subtype->parent_bundle));
         success = false;
@@ -224,7 +238,7 @@ static bool PolicyCheckSubType(const SubType *subtype, Sequence *errors)
     // ensure subtype is allowed in bundle (type)
     if (!SubTypeSyntaxLookup(subtype->parent_bundle->type, subtype->name).subtype)
     {
-        SequenceAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_SUBTYPE, subtype,
+        SeqAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_SUBTYPE, subtype,
                                               POLICY_ERROR_SUBTYPE_INVALID,
                                               subtype->name, subtype->parent_bundle->name));
         success = false;
@@ -240,7 +254,7 @@ static bool PolicyCheckSubType(const SubType *subtype, Sequence *errors)
 
 /*************************************************************************/
 
-static bool PolicyCheckBundle(const Bundle *bundle, Sequence *errors)
+static bool PolicyCheckBundle(const Bundle *bundle, Seq *errors)
 {
     assert(bundle);
     bool success = true;
@@ -250,7 +264,7 @@ static bool PolicyCheckBundle(const Bundle *bundle, Sequence *errors)
         static const char *reserved_names[] = { "sys", "const", "mon", "edit", "match", "mon", "this", NULL };
         if (IsStrIn(bundle->name, reserved_names))
         {
-            SequenceAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_BUNDLE, bundle,
+            SeqAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_BUNDLE, bundle,
                                                   POLICY_ERROR_BUNDLE_NAME_RESERVED, bundle->name));
             success = false;
         }
@@ -266,20 +280,24 @@ static bool PolicyCheckBundle(const Bundle *bundle, Sequence *errors)
 
 /*************************************************************************/
 
-bool PolicyCheck(const Policy *policy, Sequence *errors)
+bool PolicyCheck(const Policy *policy, Seq *errors)
 {
     bool success = true;
 
     // ensure bundle names are not duplicated
-    for (const Bundle *bp = policy->bundles; bp; bp = bp->next)
+    for (size_t i = 0; i < SeqLength(policy->bundles); i++)
     {
-        for (const Bundle *bp2 = policy->bundles; bp2; bp2 = bp2->next)
+        Bundle *bp = SeqAt(policy->bundles, i);
+
+        for (size_t j = 0; j < SeqLength(policy->bundles); j++)
         {
+            Bundle *bp2 = SeqAt(policy->bundles, j);
+
             if (bp != bp2 &&
                 StringSafeEqual(bp->name, bp2->name) &&
                 StringSafeEqual(bp->type, bp2->type))
             {
-                SequenceAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_BUNDLE, bp,
+                SeqAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_BUNDLE, bp,
                                                       POLICY_ERROR_BUNDLE_REDEFINITION,
                                                       bp->name, bp->type));
                 success = false;
@@ -287,25 +305,29 @@ bool PolicyCheck(const Policy *policy, Sequence *errors)
         }
     }
 
-    for (const Bundle *bp = policy->bundles; bp; bp = bp->next)
+    for (size_t i = 0; i < SeqLength(policy->bundles); i++)
     {
+        Bundle *bp = SeqAt(policy->bundles, i);
         success &= PolicyCheckBundle(bp, errors);
     }
 
     
     // ensure body names are not duplicated
-
-    for (const Body *bp = policy->bodies; bp; bp = bp->next)
+    for (size_t i = 0; i < SeqLength(policy->bodies); i++)
     {
-        for (const Body *bp2 = policy->bodies; bp2; bp2 = bp2->next)
+        const Body *bp = SeqAt(policy->bodies, i);
+
+        for (size_t j = 0; j < SeqLength(policy->bodies); j++)
         {
+            const Body *bp2 = SeqAt(policy->bodies, j);
+
             if (bp != bp2 &&
                 StringSafeEqual(bp->name, bp2->name) &&
                 StringSafeEqual(bp->type, bp2->type))
             {
                 if (strcmp(bp->type,"file") != 0)
                 {
-                    SequenceAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_BODY, bp,
+                    SeqAppend(errors, PolicyErrorNew(POLICY_ELEMENT_TYPE_BODY, bp,
                                                       POLICY_ERROR_BODY_REDEFINITION,
                                                       bp->name, bp->type));
                     success = false;
@@ -468,30 +490,18 @@ Bundle *AppendBundle(Policy *policy, const char *name, const char *type, Rlist *
     Bundle *bundle = xcalloc(1, sizeof(Bundle));
     bundle->parent_policy = policy;
 
-    if (policy->bundles == NULL)
-    {
-        policy->bundles = bundle;
-    }
-    else
-    {
-        Bundle *bp = NULL;
-        for (bp = policy->bundles; bp->next; bp = bp->next)
-        {
-        }
-
-        bp->next = bundle;
-    }
+    SeqAppend(policy->bundles, bundle);
 
     if (strcmp(policy->current_namespace,"default") == 0)
-       {
-       bundle->name = xstrdup(name);
-       }
+    {
+        bundle->name = xstrdup(name);
+    }
     else
-       {
-       char fqname[CF_BUFSIZE];
-       snprintf(fqname,CF_BUFSIZE-1, "%s:%s",policy->current_namespace,name);
-       bundle->name = xstrdup(fqname);
-       }
+    {
+        char fqname[CF_BUFSIZE];
+        snprintf(fqname,CF_BUFSIZE-1, "%s:%s",policy->current_namespace,name);
+        bundle->name = xstrdup(fqname);
+    }
 
     bundle->type = xstrdup(type);
     bundle->namespace = xstrdup(policy->current_namespace);
@@ -517,19 +527,7 @@ Body *AppendBody(Policy *policy, const char *name, const char *type, Rlist *args
     Body *body = xcalloc(1, sizeof(Body));
     body->parent_policy = policy;
 
-    if (policy->bodies == NULL)
-    {
-        policy->bodies = body;
-    }
-    else
-    {
-        Body *bp = NULL;
-        for (bp = policy->bodies; bp->next; bp = bp->next)
-        {
-        }
-
-        bp->next = body;
-    }
+    SeqAppend(policy->bodies, body);
 
     if (strcmp(policy->current_namespace,"default") == 0)
        {
@@ -546,6 +544,7 @@ Body *AppendBody(Policy *policy, const char *name, const char *type, Rlist *args
     body->namespace = xstrdup(policy->current_namespace);
     body->args = CopyRlist(args);
     body->source_path = SafeStringDuplicate(source_path);
+    body->conlist = SeqNew(10, ConstraintDestroy);
 
     return body;
 }
@@ -662,6 +661,7 @@ Promise *AppendPromise(SubType *type, char *promiser, Rval promisee, char *class
     pp->classes = spe;
     pp->donep = &(pp->done);
     pp->has_subbundles = false;
+    pp->conlist = SeqNew(10, ConstraintDestroy);
     pp->org_pp = NULL;
 
     pp->bundletype = xstrdup(bundletype);       /* cache agent,common,server etc */
@@ -695,62 +695,30 @@ static void DeleteSubTypes(SubType *tp)
     free(tp);
 }
 
-/*******************************************************************/
-
-void DeleteBundles(Bundle *bp)
+static void BundleDestroy(Bundle *bundle)
 {
-    if (bp == NULL)
+    if (bundle)
     {
-        return;
-    }
+        free(bundle->name);
+        free(bundle->type);
 
-    if (bp->next != NULL)
-    {
-        DeleteBundles(bp->next);
+        DeleteRlist(bundle->args);
+        DeleteSubTypes(bundle->subtypes);
+        free(bundle);
     }
-
-    if (bp->name != NULL)
-    {
-        free(bp->name);
-    }
-
-    if (bp->type != NULL)
-    {
-        free(bp->type);
-    }
-
-    DeleteRlist(bp->args);
-    DeleteSubTypes(bp->subtypes);
-    free(bp);
 }
 
-/*******************************************************************/
-
-void DeleteBodies(Body *bp)
+static void BodyDestroy(Body *body)
 {
-    if (bp == NULL)
+    if (body)
     {
-        return;
-    }
+        free(body->name);
+        free(body->type);
 
-    if (bp->next != NULL)
-    {
-        DeleteBodies(bp->next);
+        DeleteRlist(body->args);
+        SeqDestroy(body->conlist);
+        free(body);
     }
-
-    if (bp->name != NULL)
-    {
-        free(bp->name);
-    }
-
-    if (bp->type != NULL)
-    {
-        free(bp->type);
-    }
-
-    DeleteRlist(bp->args);
-    DeleteConstraintList(bp->conlist);
-    free(bp);
 }
 
 /*******************************************************************/
@@ -783,7 +751,7 @@ void DeletePromise(Promise *pp)
 
 // ref and agentsubtype are only references, do not free
 
-    DeleteConstraintList(pp->conlist);
+    SeqDestroy(pp->conlist);
 
     free((char *) pp);
     ThreadUnlock(cft_policy);
@@ -827,8 +795,10 @@ Bundle *GetBundle(const Policy *policy, const char *name, const char *agent)
 
     // We don't need to check for the namespace here, as it is prefixed to the name already
 
-    for (Bundle *bp = policy->bundles; bp != NULL; bp = bp->next)       /* get schedule */
+    for (size_t i = 0; i < SeqLength(policy->bundles); i++)
     {
+        Bundle *bp = SeqAt(policy->bundles, i);
+
         if (strcmp(bp->name, name) == 0)
         {
             if (agent)

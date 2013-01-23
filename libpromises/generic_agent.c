@@ -69,7 +69,7 @@ static void CheckWorkingDirectories(const ReportContext *report_context);
 static void Cf3ParseFile(Policy *policy, const char *filename, const char *input_file, bool check_not_writable_by_others);
 static void Cf3ParseFiles(Policy *policy, const char *input_file, bool check_not_writable_by_others, const ReportContext *report_context);
 static bool MissingInputFile(const char *input_file);
-static void CheckControlPromises(char *scope, char *agent, Constraint *controllist);
+static void CheckControlPromises(char *scope, char *agent, Seq *controllist);
 static void CheckVariablePromises(char *scope, Promise *varlist);
 static void CheckCommonClassPromises(Promise *classlist, const ReportContext *report_context);
 static void PrependAuditFile(char *file);
@@ -407,7 +407,7 @@ Policy *ReadPromises(AgentType ag, char *agents, GenericAgentConfig *config,
     Policy *policy = PolicyNew();
     Cf3ParseFiles(policy, config->input_file, check_not_writable_by_others, report_context);
     {
-        Sequence *errors = SequenceCreate(100, PolicyErrorDestroy);
+        Seq *errors = SeqNew(100, PolicyErrorDestroy);
         if (!PolicyCheck(policy, errors))
         {
             Writer *writer = FileWriter(stderr);
@@ -418,7 +418,7 @@ Policy *ReadPromises(AgentType ag, char *agents, GenericAgentConfig *config,
             WriterClose(writer);
         }
 
-        SequenceDestroy(errors);
+        SeqDestroy(errors);
     }
 
 /* Now import some web variables that are set in cf-know/control for the report options */
@@ -1007,10 +1007,12 @@ static void Cf3ParseFile(Policy *policy, const char *filename, const char *input
 
 /*******************************************************************/
 
-Constraint *ControlBodyConstraints(const Policy *policy, AgentType agent)
+Seq *ControlBodyConstraints(const Policy *policy, AgentType agent)
 {
-    for (const Body *body = policy->bodies; body != NULL; body = body->next)
+    for (size_t i = 0; i < SeqLength(policy->bodies); i++)
     {
+        const Body *body = SeqAt(policy->bodies, i);
+
         if (strcmp(body->type, CF_AGENTTYPES[agent]) == 0)
         {
             if (strcmp(body->name, "control") == 0)
@@ -1269,7 +1271,6 @@ void CompilationReport(Policy *policy, char *fname)
     ReportContext *compilation_report_context = OpenCompilationReportFiles(fname);
 #endif
 
-
     ShowPromises(compilation_report_context, REPORT_OUTPUT_TYPE_TEXT, policy->bundles, policy->bodies);
     ShowPromises(compilation_report_context, REPORT_OUTPUT_TYPE_HTML, policy->bundles, policy->bodies);
 
@@ -1311,18 +1312,18 @@ ReportContext *OpenCompilationReportFiles(const char *fname)
 static void VerifyPromises(Policy *policy, Rlist *bundlesequence,
                            const ReportContext *report_context)
 {
-    Bundle *bp;
     SubType *sp;
     Promise *pp;
-    Body *bdp;
     Rlist *rp;
     FnCall *fp;
     char *scope;
 
     if (REQUIRE_COMMENTS == CF_UNDEFINED)
     {
-        for (bdp = policy->bodies; bdp != NULL; bdp = bdp->next)        /* get schedule */
+        for (size_t i = 0; i < SeqLength(policy->bodies); i++)
         {
+            Body *bdp = SeqAt(policy->bodies, i);
+
             if ((strcmp(bdp->name, "control") == 0) && (strcmp(bdp->type, "common") == 0))
             {
                 REQUIRE_COMMENTS = GetRawBooleanConstraint("require_comments", bdp->conlist);
@@ -1386,8 +1387,10 @@ static void VerifyPromises(Policy *policy, Rlist *bundlesequence,
 
 /* Now look once through ALL the bundles themselves */
 
-    for (bp = policy->bundles; bp != NULL; bp = bp->next)       /* get schedule */
+    for (size_t i = 0; i < SeqLength(policy->bundles); i++)
     {
+        Bundle *bp = SeqAt(policy->bundles, i);
+
         scope = bp->name;
         THIS_BUNDLE = bp->name;
 
@@ -1470,17 +1473,15 @@ static void CheckCommonClassPromises(Promise *classlist, const ReportContext *re
 
 /*******************************************************************/
 
-static void CheckControlPromises(char *scope, char *agent, Constraint *controllist)
+static void CheckControlPromises(char *scope, char *agent, Seq *controllist)
 {
-    Constraint *cp;
     const BodySyntax *bp = NULL;
     Rlist *rp;
-    int i = 0;
     Rval returnval;
 
     CfDebug("CheckControlPromises(%s)\n", agent);
 
-    for (i = 0; CF_ALL_BODIES[i].bs != NULL; i++)
+    for (int i = 0; CF_ALL_BODIES[i].bs != NULL; i++)
     {
         bp = CF_ALL_BODIES[i].bs;
 
@@ -1495,8 +1496,10 @@ static void CheckControlPromises(char *scope, char *agent, Constraint *controlli
         FatalError("Unknown agent");
     }
 
-    for (cp = controllist; cp != NULL; cp = cp->next)
+    for (size_t i = 0; i < SeqLength(controllist); i++)
     {
+        Constraint *cp = SeqAt(controllist, i);
+
         if (IsExcluded(cp->classes, NULL))
         {
             continue;
@@ -1774,13 +1777,14 @@ void WritePID(char *filename)
 
 void HashVariables(Policy *policy, const char *name, const ReportContext *report_context)
 {
-    Bundle *bp;
     SubType *sp;
 
     CfOut(cf_verbose, "", "Initiate variable convergence...\n");
 
-    for (bp = policy->bundles; bp != NULL; bp = bp->next)       /* get schedule */
+    for (size_t i = 0; i < SeqLength(policy->bundles); i++)
     {
+        Bundle *bp = SeqAt(policy->bundles, i);
+
         if (name && strcmp(name, bp->name) != 0)
         {
             continue;
@@ -1816,13 +1820,14 @@ void HashVariables(Policy *policy, const char *name, const ReportContext *report
 
 void HashControls(const Policy *policy)
 {
-    Body *bdp;
     char buf[CF_BUFSIZE];
 
 /* Only control bodies need to be hashed like variables */
 
-    for (bdp = policy->bodies; bdp != NULL; bdp = bdp->next)    /* get schedule */
+    for (size_t i = 0; i < SeqLength(policy->bodies); i++)
     {
+        Body *bdp = SeqAt(policy->bodies, i);
+
         if (strcmp(bdp->name, "control") == 0)
         {
             snprintf(buf, CF_BUFSIZE, "%s_%s", bdp->name, bdp->type);
