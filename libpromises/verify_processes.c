@@ -36,6 +36,7 @@
 #include "transaction.h"
 #include "exec_tools.h"
 #include "logging.h"
+#include "rlist.h"
 
 static void VerifyProcesses(Attributes a, Promise *pp);
 static int ProcessSanityChecks(Attributes a, Promise *pp);
@@ -70,7 +71,7 @@ static int ProcessSanityChecks(Attributes a, Promise *pp)
 
     if (a.restart_class)
     {
-        if ((IsStringIn(a.signals, "term")) || (IsStringIn(a.signals, "kill")))
+        if ((RlistIsStringIn(a.signals, "term")) || (RlistIsStringIn(a.signals, "kill")))
         {
             CfOut(cf_inform, "", " -> (warning) Promise %s kills then restarts - never strictly converges",
                   pp->promiser);
@@ -128,7 +129,7 @@ static void VerifyProcesses(Attributes a, Promise *pp)
     }
 
     DeleteScalar("this", "promiser");
-    NewScalar("this", "promiser", pp->promiser, cf_str);
+    NewScalar("this", "promiser", pp->promiser, DATA_TYPE_STRING);
     PromiseBanner(pp);
     VerifyProcessOp(PROCESSTABLE, a, pp);
     DeleteScalar("this", "promiser");
@@ -151,13 +152,13 @@ static void VerifyProcessOp(Item *procdata, Attributes a, Promise *pp)
     {
         if ((matches < a.process_count.min_range) || (matches > a.process_count.max_range))
         {
-            cfPS(cf_error, CF_CHG, "", pp, a, " !! Process count for \'%s\' was out of promised range (%d found)\n", pp->promiser, matches);
-            AddEphemeralClasses(a.process_count.out_of_range_define, pp->namespace);
+            cfPS(cf_verbose, CF_CHG, "", pp, a, " !! Process count for \'%s\' was out of promised range (%d found)\n", pp->promiser, matches);
+            AddEphemeralClasses(a.process_count.out_of_range_define, pp->ns);
             out_of_range = true;
         }
         else
         {
-            AddEphemeralClasses(a.process_count.in_range_define, pp->namespace);
+            AddEphemeralClasses(a.process_count.in_range_define, pp->ns);
             cfPS(cf_verbose, CF_NOP, "", pp, a, " -> Process promise for %s is kept", pp->promiser);
             out_of_range = false;
         }
@@ -233,7 +234,7 @@ static void VerifyProcessOp(Item *procdata, Attributes a, Promise *pp)
         else
         {
             cfPS(cf_inform, CF_CHG, "", pp, a, " -> Making a one-time restart promise for %s", pp->promiser);
-            NewClass(a.restart_class, pp->namespace);
+            NewClass(a.restart_class, pp->ns);
         }
     }
 }
@@ -277,19 +278,19 @@ static int DoAllSignals(Item *siglist, Attributes a, Promise *pp)
                 if (kill((pid_t) pid, signal) < 0)
                 {
                     cfPS(cf_verbose, CF_FAIL, "kill", pp, a,
-                         " !! Couldn't send promised signal \'%s\' (%d) to pid %jd (might be dead)\n", ScalarValue(rp),
+                         " !! Couldn't send promised signal \'%s\' (%d) to pid %jd (might be dead)\n", RlistScalarValue(rp),
                          signal, (intmax_t)pid);
                 }
                 else
                 {
                     cfPS(cf_inform, CF_CHG, "", pp, a, " -> Signalled '%s' (%d) to process %jd (%s)\n",
-                         ScalarValue(rp), signal, (intmax_t)pid, ip->name);
+                         RlistScalarValue(rp), signal, (intmax_t)pid, ip->name);
                 }
             }
             else
             {
                 CfOut(cf_error, "", " -> Need to keep signal promise \'%s\' in process entry %s",
-                      ScalarValue(rp), ip->name);
+                      RlistScalarValue(rp), ip->name);
             }
         }
     }

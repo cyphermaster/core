@@ -92,6 +92,14 @@ void SeqAppend(Seq *seq, void *item)
     ++(seq->length);
 }
 
+void SeqAppendSeq(Seq *seq, const Seq *items)
+{
+    for (size_t i = 0; i < SeqLength(items); i++)
+    {
+        SeqAppend(seq, SeqAt(items, i));
+    }
+}
+
 void SeqRemoveRange(Seq *seq, size_t start, size_t end)
 {
     assert(seq);
@@ -219,5 +227,11 @@ void SeqReverse(Seq *seq)
     {
         Swap(&seq->data[i], &seq->data[seq->length - 1 - i]);
     }
+}
+
+size_t SeqLength(const Seq *seq)
+{
+    assert(seq);
+    return seq->length;
 }
 

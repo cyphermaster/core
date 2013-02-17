@@ -23,7 +23,8 @@
 
 */
 
-#include "cf3.defs.h"
+#include "server_transform.h"
+
 #include "server.h"
 
 #include "env_context.h"
@@ -41,6 +42,8 @@
 #include "cfstream.h"
 #include "communication.h"
 #include "string_lib.h"
+#include "rlist.h"
+
 #include "generic_agent.h" // HashControls
 
 static void KeepContextBundles(Policy *policy, const ReportContext *report_context);
@@ -48,6 +51,7 @@ static void KeepServerPromise(Promise *pp);
 static void InstallServerAuthPath(char *path, Auth **list, Auth **listtop);
 static void KeepServerRolePromise(Promise *pp);
 static void KeepPromiseBundles(Policy *policy, const ReportContext *report_context);
+static void KeepControlPromises(Policy *policy, GenericAgentConfig *config);
 
 extern const BodySyntax CFS_CONTROLBODY[];
 extern const BodySyntax CF_REMROLE_BODIES[];
@@ -81,10 +85,10 @@ void KeepQueryAccessPromise(Promise *pp, char *type);
 /* Level                                                           */
 /*******************************************************************/
 
-void KeepPromises(Policy *policy, const ReportContext *report_context)
+void KeepPromises(Policy *policy, GenericAgentConfig *config, const ReportContext *report_context)
 {
     KeepContextBundles(policy, report_context);
-    KeepControlPromises(policy);
+    KeepControlPromises(policy, config);
     KeepPromiseBundles(policy, report_context);
 }
 
@@ -202,7 +206,7 @@ void Summarize()
 /* Level                                                           */
 /*******************************************************************/
 
-void KeepControlPromises(Policy *policy)
+static void KeepControlPromises(Policy *policy, GenericAgentConfig *config)
 {
     Rval retval;
 
@@ -217,7 +221,7 @@ void KeepControlPromises(Policy *policy)
 
     Banner("Server control promises..");
 
-    HashControls(policy);
+    HashControls(policy, config);
 
 /* Now expand */
 
@@ -233,7 +237,7 @@ void KeepControlPromises(Policy *policy)
                 continue;
             }
 
-            if (GetVariable("control_server", cp->lval, &retval) == cf_notype)
+            if (GetVariable("control_server", cp->lval, &retval) == DATA_TYPE_NONE)
             {
                 CfOut(cf_error, "", "Unknown lval %s in server control body", cp->lval);
                 continue;
@@ -411,7 +415,7 @@ void KeepControlPromises(Policy *policy)
                 SHORT_CFENGINEPORT = (short) Str2Int(retval.item);
                 strncpy(STR_CFENGINEPORT, retval.item, 15);
                 CfOut(cf_verbose, "", "SET default portnumber = %u = %s = %s\n", (int) SHORT_CFENGINEPORT, STR_CFENGINEPORT,
-                      ScalarRvalValue(retval));
+                      RvalScalarValue(retval));
                 SHORT_CFENGINEPORT = htons((short) Str2Int(retval.item));
                 continue;
             }
@@ -431,23 +435,23 @@ void KeepControlPromises(Policy *policy)
         }
     }
 
-    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_syslog_host].lval, &retval) != cf_notype)
+    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_syslog_host].lval, &retval) != DATA_TYPE_NONE)
     {
         SetSyslogHost(Hostname2IPString(retval.item));
     }
 
-    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_syslog_port].lval, &retval) != cf_notype)
+    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_syslog_port].lval, &retval) != DATA_TYPE_NONE)
     {
         SetSyslogPort(Str2Int(retval.item));
     }
 
-    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_fips_mode].lval, &retval) != cf_notype)
+    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_fips_mode].lval, &retval) != DATA_TYPE_NONE)
     {
         FIPS_MODE = GetBoolean(retval.item);
         CfOut(cf_verbose, "", "SET FIPS_MODE = %d\n", FIPS_MODE);
     }
 
-    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_lastseenexpireafter].lval, &retval) != cf_notype)
+    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_lastseenexpireafter].lval, &retval) != DATA_TYPE_NONE)
     {
         LASTSEENEXPIREAFTER = Str2Int(retval.item) * 60;
     }
@@ -457,8 +461,6 @@ void KeepControlPromises(Policy *policy)
 
 static void KeepContextBundles(Policy *policy, const ReportContext *report_context)
 {
-    SubType *sp;
-    Promise *pp;
     char *scope;
 
 /* Dial up the generic promise expansion with a callback */
@@ -477,8 +479,10 @@ static void KeepContextBundles(Policy *policy, const ReportContext *report_conte
             BannerBundle(bp, NULL);
             scope = bp->name;
 
-            for (sp = bp->subtypes; sp != NULL; sp = sp->next)  /* get schedule */
+            for (size_t j = 0; j < SeqLength(bp->subtypes); j++)
             {
+                SubType *sp = SeqAt(bp->subtypes, j);
+
                 if ((strcmp(sp->name, "vars") != 0) && (strcmp(sp->name, "classes") != 0))
                 {
                     continue;
@@ -486,10 +490,11 @@ static void KeepContextBundles(Policy *policy, const ReportContext *report_conte
 
                 BannerSubType(scope, sp->name, 0);
                 SetScope(scope);
-                AugmentScope(scope, bp->namespace, NULL, NULL);
+                AugmentScope(scope, bp->ns, NULL, NULL);
 
-                for (pp = sp->promiselist; pp != NULL; pp = pp->next)
+                for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
                 {
+                    Promise *pp = SeqAt(sp->promises, ppi);
                     ExpandPromise(AGENT_TYPE_SERVER, scope, pp, KeepServerPromise, report_context);
                 }
             }
@@ -501,8 +506,6 @@ static void KeepContextBundles(Policy *policy, const ReportContext *report_conte
 
 static void KeepPromiseBundles(Policy *policy, const ReportContext *report_context)
 {
-    SubType *sp;
-    Promise *pp;
     char *scope;
 
 /* Dial up the generic promise expansion with a callback */
@@ -521,8 +524,10 @@ static void KeepPromiseBundles(Policy *policy, const ReportContext *report_conte
             BannerBundle(bp, NULL);
             scope = bp->name;
 
-            for (sp = bp->subtypes; sp != NULL; sp = sp->next)  /* get schedule */
+            for (size_t j = 0; j < SeqLength(bp->subtypes); j++)
             {
+                SubType *sp = SeqAt(bp->subtypes, j);
+
                 if ((strcmp(sp->name, "access") != 0) && (strcmp(sp->name, "roles") != 0))
                 {
                     continue;
@@ -530,10 +535,11 @@ static void KeepPromiseBundles(Policy *policy, const ReportContext *report_conte
 
                 BannerSubType(scope, sp->name, 0);
                 SetScope(scope);
-                AugmentScope(scope, bp->namespace, NULL, NULL);
+                AugmentScope(scope, bp->ns, NULL, NULL);
 
-                for (pp = sp->promiselist; pp != NULL; pp = pp->next)
+                for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
                 {
+                    Promise *pp = SeqAt(sp->promises, ppi);
                     ExpandPromise(AGENT_TYPE_SERVER, scope, pp, KeepServerPromise, report_context);
                 }
             }
@@ -549,7 +555,7 @@ static void KeepServerPromise(Promise *pp)
 {
     char *sp = NULL;
 
-    if (!IsDefinedClass(pp->classes, pp->namespace))
+    if (!IsDefinedClass(pp->classes, pp->ns))
     {
         CfOut(cf_verbose, "", "Skipping whole promise, as context is %s\n", pp->classes);
         return;
@@ -571,7 +577,7 @@ static void KeepServerPromise(Promise *pp)
         return;
     }
 
-    sp = (char *) GetConstraintValue("resource_type", pp, CF_SCALAR);
+    sp = (char *) GetConstraintValue("resource_type", pp, RVAL_TYPE_SCALAR);
 
     if ((strcmp(pp->agentsubtype, "access") == 0) && sp && (strcmp(sp, "literal") == 0))
     {
@@ -641,14 +647,14 @@ void KeepFileAccessPromise(Promise *pp)
     {
         Constraint *cp = SeqAt(pp->conlist, i);
 
-        if (!IsDefinedClass(cp->classes, pp->namespace))
+        if (!IsDefinedClass(cp->classes, pp->ns))
         {
             continue;
         }
 
-        switch (cp->rval.rtype)
+        switch (cp->rval.type)
         {
-        case CF_SCALAR:
+        case RVAL_TYPE_SCALAR:
 
             if (strcmp(cp->lval, CF_REMACCESS_BODIES[cfs_encrypted].lval) == 0)
             {
@@ -657,7 +663,7 @@ void KeepFileAccessPromise(Promise *pp)
 
             break;
 
-        case CF_LIST:
+        case RVAL_TYPE_LIST:
 
             for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
             {
@@ -681,7 +687,7 @@ void KeepFileAccessPromise(Promise *pp)
             }
             break;
 
-        case CF_FNCALL:
+        default:
             /* Shouldn't happen */
             break;
         }
@@ -694,7 +700,7 @@ void KeepLiteralAccessPromise(Promise *pp, char *type)
 {
     Rlist *rp;
     Auth *ap = NULL, *dp = NULL;
-    char *handle = GetConstraintValue("handle", pp, CF_SCALAR);
+    char *handle = GetConstraintValue("handle", pp, RVAL_TYPE_SCALAR);
 
     if ((handle == NULL) && (strcmp(type,"literal") == 0))
     {
@@ -755,14 +761,14 @@ void KeepLiteralAccessPromise(Promise *pp, char *type)
     {
         Constraint *cp = SeqAt(pp->conlist, i);
 
-        if (!IsDefinedClass(cp->classes, pp->namespace))
+        if (!IsDefinedClass(cp->classes, pp->ns))
         {
             continue;
         }
 
-        switch (cp->rval.rtype)
+        switch (cp->rval.type)
         {
-        case CF_SCALAR:
+        case RVAL_TYPE_SCALAR:
 
             if (strcmp(cp->lval, CF_REMACCESS_BODIES[cfs_encrypted].lval) == 0)
             {
@@ -771,7 +777,7 @@ void KeepLiteralAccessPromise(Promise *pp, char *type)
 
             break;
 
-        case CF_LIST:
+        case RVAL_TYPE_LIST:
 
             for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
             {
@@ -795,7 +801,7 @@ void KeepLiteralAccessPromise(Promise *pp, char *type)
             }
             break;
 
-        case CF_FNCALL:
+        default:
             /* Shouldn't happen */
             break;
         }
@@ -833,14 +839,14 @@ void KeepQueryAccessPromise(Promise *pp, char *type)
     {
         Constraint *cp = SeqAt(pp->conlist, i);
 
-        if (!IsDefinedClass(cp->classes, pp->namespace))
+        if (!IsDefinedClass(cp->classes, pp->ns))
         {
             continue;
         }
 
-        switch (cp->rval.rtype)
+        switch (cp->rval.type)
         {
-        case CF_SCALAR:
+        case RVAL_TYPE_SCALAR:
 
             if (strcmp(cp->lval, CF_REMACCESS_BODIES[cfs_encrypted].lval) == 0)
             {
@@ -849,7 +855,7 @@ void KeepQueryAccessPromise(Promise *pp, char *type)
 
             break;
 
-        case CF_LIST:
+        case RVAL_TYPE_LIST:
 
             for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
             {
@@ -873,7 +879,7 @@ void KeepQueryAccessPromise(Promise *pp, char *type)
             }
             break;
 
-        case CF_FNCALL:
+        default:
             /* Shouldn't happen */
             break;
         }
@@ -898,14 +904,14 @@ static void KeepServerRolePromise(Promise *pp)
     {
         Constraint *cp = SeqAt(pp->conlist, i);
 
-        if (!IsDefinedClass(cp->classes, pp->namespace))
+        if (!IsDefinedClass(cp->classes, pp->ns))
         {
             continue;
         }
 
-        switch (cp->rval.rtype)
+        switch (cp->rval.type)
         {
-        case CF_LIST:
+        case RVAL_TYPE_LIST:
 
             for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
             {
@@ -917,7 +923,7 @@ static void KeepServerRolePromise(Promise *pp)
             }
             break;
 
-        case CF_FNCALL:
+        case RVAL_TYPE_FNCALL:
             /* Shouldn't happen */
             break;
 

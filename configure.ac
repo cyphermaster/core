@@ -362,10 +362,15 @@ if test "x$with_libxml2" != xno; then
    fi
 
     CF3_WITH_LIBRARY(libxml2, [
-      AC_CHECK_LIB(xml2, xmlXPathNewContext, [], [if test "x$with_libxml2" != xcheck; then AC_MSG_ERROR(Cannot find libxml2); fi])
+      AC_CHECK_LIB(xml2, xmlFirstElementChild, [], [if test "x$with_libxml2" != xcheck; then AC_MSG_ERROR(Cannot find libxml2); fi])
       AC_CHECK_HEADERS([libxml/xmlwriter.h], [break], [if test "x$with_libxml2" != xcheck; then AC_MSG_ERROR(Cannot find libxml2); fi])
     ])
 fi
+
+dnl avahi
+
+AC_CHECK_HEADERS(avahi-client/client.h, AM_CONDITIONAL(HAVE_AVAHI_CLIENT, true), AM_CONDITIONAL(HAVE_AVAHI_CLIENT, false), [])
+AC_CHECK_HEADERS(avahi-common/address.h, AM_CONDITIONAL(HAVE_AVAHI_COMMON, true), AM_CONDITIONAL(HAVE_AVAHI_COMMON, false),[])
 
 dnl
 
@@ -640,6 +645,13 @@ AC_CHECK_MEMBERS([struct sockaddr.sa_len], , , [
 AC_CHECK_MEMBERS([struct ifreq.ifr_hwaddr],,, [
 #include <sys/ioctl.h>
 #include <net/if.h>])
+
+dnl BSD uses sys/sysctl.h for CPU counting
+AC_CHECK_HEADERS(sys/sysctl.h, [], [], [AC_INCLUDES_DEFAULT
+#ifdef HAVE_SYS_PARAM_H
+# include <sys/param.h>
+#endif
+])
    
 dnl #######################################################################
 dnl Newer BSD systems don't have a compatible rtentry - use ortentry
@@ -958,7 +970,7 @@ else
   AC_MSG_RESULT([-> libacl: disabled])
 fi
 
-if test "x$ac_cv_lib_xml2_xmlXPathNewContext" = xyes; then
+if test "x$ac_cv_lib_xml2_xmlFirstElementChild" = xyes; then
   AC_MSG_RESULT([-> libxml2: $LIBXML2_PATH])
 else
   AC_MSG_RESULT([-> libxml2: disabled])
@@ -986,7 +998,6 @@ AC_CONFIG_FILES([Makefile
 	cf-gendoc/Makefile
 	cf-key/Makefile
 	cf-monitord/Makefile
-	cf-report/Makefile
 	cf-runagent/Makefile
 	cf-serverd/Makefile
 	ext/Makefile

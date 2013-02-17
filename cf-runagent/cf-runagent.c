@@ -41,10 +41,16 @@
 #include "net.h"
 #include "logging.h"
 #include "string_lib.h"
+#include "rlist.h"
+
+#ifdef HAVE_NOVA
+#include "runagent.h"
+#endif
 
 static void ThisAgentInit(void);
 static GenericAgentConfig *CheckOpts(int argc, char **argv);
 
+static void KeepControlPromises(Policy *policy);
 static int HailServer(char *host, Attributes a, Promise *pp);
 static int ParseHostname(char *hostname, char *new_hostname);
 static void SendClassData(AgentConnection *conn);
@@ -137,9 +143,13 @@ int main(int argc, char *argv[])
 #endif
 
     GenericAgentConfig *config = CheckOpts(argc, argv);
-    ReportContext *report_context = OpenReports("runagent");
+    ReportContext *report_context = OpenReports(config->agent_type);
 
-    Policy *policy = GenericInitialize("runagent", config, report_context);
+    GenericAgentDiscoverContext(config, report_context);
+    Policy *policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+
+    CheckLicenses();
+
     ThisAgentInit();
     KeepControlPromises(policy);      // Set RUNATTR using copy
 
@@ -211,7 +221,7 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    DeletePromise(pp);
+    PromiseDestroy(pp);
 
     GenericAgentConfigDestroy(config);
     ReportContextDestroy(report_context);
@@ -289,7 +299,7 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'H':
-            HOSTLIST = SplitStringAsRList(optarg, ',');
+            HOSTLIST = RlistFromSplitString(optarg, ',');
             break;
 
         case 'o':
@@ -331,7 +341,7 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             exit(0);
 
         case 'x':
-            SelfDiagnostic();
+            CfOut(cf_error, "", "Self-diagnostic functionality is retired.");
             exit(0);
 
         default:
@@ -450,7 +460,7 @@ static int HailServer(char *host, Attributes a, Promise *pp)
 
 #endif /* !__MINGW32__ */
 
-    a.copy.servers = SplitStringAsRList(peer, '*');
+    a.copy.servers = RlistFromSplitString(peer, '*');
 
     if (a.copy.servers == NULL || strcmp(a.copy.servers->item, "localhost") == 0)
     {
@@ -463,7 +473,7 @@ static int HailServer(char *host, Attributes a, Promise *pp)
 
         if (conn == NULL)
         {
-            DeleteRlist(a.copy.servers);
+            RlistDestroy(a.copy.servers);
             CfOut(cf_verbose, "", " -> No suitable server responded to hail\n");
             return false;
         }
@@ -476,10 +486,10 @@ static int HailServer(char *host, Attributes a, Promise *pp)
     if (strlen(MENU) > 0)
     {
 #if defined(HAVE_NOVA)
-        if (!Nova_ExecuteRunagent(conn, MENU))
+        if (!ExecuteRunagent(conn, MENU))
         {
             DisconnectServer(conn);
-            DeleteRlist(a.copy.servers);
+            RlistDestroy(a.copy.servers);
             return false;
         }
 #endif
@@ -489,7 +499,7 @@ static int HailServer(char *host, Attributes a, Promise *pp)
         HailExec(conn, peer, recvbuffer, sendbuffer);
     }
 
-    DeleteRlist(a.copy.servers);
+    RlistDestroy(a.copy.servers);
 
     return true;
 }
@@ -498,7 +508,7 @@ static int HailServer(char *host, Attributes a, Promise *pp)
 /* Level 2                                                          */
 /********************************************************************/
 
-void KeepControlPromises(Policy *policy)
+static void KeepControlPromises(Policy *policy)
 {
     Rval retval;
 
@@ -521,7 +531,7 @@ void KeepControlPromises(Policy *policy)
                 continue;
             }
 
-            if (GetVariable("control_runagent", cp->lval, &retval) == cf_notype)
+            if (GetVariable("control_runagent", cp->lval, &retval) == DATA_TYPE_NONE)
             {
                 CfOut(cf_error, "", "Unknown lval %s in runagent control body", cp->lval);
                 continue;
@@ -613,7 +623,7 @@ void KeepControlPromises(Policy *policy)
         }
     }
 
-    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_lastseenexpireafter].lval, &retval) != cf_notype)
+    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_lastseenexpireafter].lval, &retval) != DATA_TYPE_NONE)
     {
         LASTSEENEXPIREAFTER = Str2Int(retval.item) * 60;
     }
@@ -632,7 +642,7 @@ static Promise *MakeDefaultRunAgentPromise()
 
     pp->bundle = xstrdup("implicit internal bundle for runagent");
     pp->promiser = xstrdup("runagent");
-    pp->promisee = (Rval) {NULL, CF_NOPROMISEE};
+    pp->promisee = (Rval) {NULL, RVAL_TYPE_NOPROMISEE };
     pp->donep = &(pp->done);
 
     return pp;
@@ -663,7 +673,7 @@ static void SendClassData(AgentConnection *conn)
     Rlist *classes, *rp;
     char sendbuffer[CF_BUFSIZE];
 
-    classes = SplitRegexAsRList(SENDCLASSES, "[,: ]", 99, false);
+    classes = RlistFromSplitRegex(SENDCLASSES, "[,: ]", 99, false);
 
     for (rp = classes; rp != NULL; rp = rp->next)
     {

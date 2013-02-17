@@ -33,6 +33,7 @@
 #include "fncall.h"
 #include "transaction.h"
 #include "logging.h"
+#include "rlist.h"
 
 static int ServicesSanityChecks(Attributes a, Promise *pp);
 static void SetServiceDefaults(Attributes *a);
@@ -168,7 +169,7 @@ void VerifyServices(Attributes a, Promise *pp, const ReportContext *report_conte
         return;
     }
 
-    NewScalar("this", "promiser", pp->promiser, cf_str);
+    NewScalar("this", "promiser", pp->promiser, DATA_TYPE_STRING);
     PromiseBanner(pp);
 
     if (strcmp(a.service.service_type, "windows") == 0)
@@ -195,37 +196,37 @@ static void DoVerifyServices(Attributes a, Promise *pp, const ReportContext *rep
 
 // Need to set up the default service pack to eliminate syntax
 
-    if (GetConstraintValue("service_bundle", pp, CF_SCALAR) == NULL)
+    if (GetConstraintValue("service_bundle", pp, RVAL_TYPE_SCALAR) == NULL)
     {
         switch (a.service.service_policy)
         {
         case cfsrv_start:
-            AppendRlist(&args, pp->promiser, CF_SCALAR);
-            AppendRlist(&args, "start", CF_SCALAR);
+            RlistAppend(&args, pp->promiser, RVAL_TYPE_SCALAR);
+            RlistAppend(&args, "start", RVAL_TYPE_SCALAR);
             break;
 
         case cfsrv_restart:
-            AppendRlist(&args, pp->promiser, CF_SCALAR);
-            AppendRlist(&args, "restart", CF_SCALAR);
+            RlistAppend(&args, pp->promiser, RVAL_TYPE_SCALAR);
+            RlistAppend(&args, "restart", RVAL_TYPE_SCALAR);
             break;
 
         case cfsrv_reload:
-            AppendRlist(&args, pp->promiser, CF_SCALAR);
-            AppendRlist(&args, "restart", CF_SCALAR);
+            RlistAppend(&args, pp->promiser, RVAL_TYPE_SCALAR);
+            RlistAppend(&args, "restart", RVAL_TYPE_SCALAR);
             break;
             
         case cfsrv_stop:
         case cfsrv_disable:
         default:
-            AppendRlist(&args, pp->promiser, CF_SCALAR);
-            AppendRlist(&args, "stop", CF_SCALAR);
+            RlistAppend(&args, pp->promiser, RVAL_TYPE_SCALAR);
+            RlistAppend(&args, "stop", RVAL_TYPE_SCALAR);
             break;
 
         }
 
-        default_bundle = NewFnCall("default:standard_services", args);
+        default_bundle = FnCallNew("default:standard_services", args);
 
-        ConstraintAppendToPromise(pp, "service_bundle", (Rval) {default_bundle, CF_FNCALL}, "any", false);
+        PromiseAppendConstraint(pp, "service_bundle", (Rval) {default_bundle, RVAL_TYPE_FNCALL }, "any", false);
         a.havebundle = true;
     }
 
@@ -234,25 +235,31 @@ static void DoVerifyServices(Attributes a, Promise *pp, const ReportContext *rep
     switch (a.service.service_policy)
     {
     case cfsrv_start:
-        NewScalar("this", "service_policy", "start", cf_str);
+        NewScalar("this", "service_policy", "start", DATA_TYPE_STRING);
         break;
 
     case cfsrv_restart:
-        NewScalar("this", "service_policy", "restart", cf_str);
+        NewScalar("this", "service_policy", "restart", DATA_TYPE_STRING);
         break;
 
     case cfsrv_reload:
-        NewScalar("this", "service_policy", "reload", cf_str);
+        NewScalar("this", "service_policy", "reload", DATA_TYPE_STRING);
         break;
         
     case cfsrv_stop:
     case cfsrv_disable:
     default:
-        NewScalar("this", "service_policy", "stop", cf_str);
+        NewScalar("this", "service_policy", "stop", DATA_TYPE_STRING);
         break;
     }
 
-    if (default_bundle && GetBundle(PolicyFromPromise(pp), default_bundle->name, "agent") == NULL)
+    const Bundle *bp = PolicyGetBundle(PolicyFromPromise(pp), NULL, "agent", default_bundle->name);
+    if (!bp)
+    {
+        bp = PolicyGetBundle(PolicyFromPromise(pp), NULL, "common", default_bundle->name);
+    }
+
+    if (default_bundle && bp == NULL)
     {
         cfPS(cf_inform, CF_FAIL, "", pp, a, " !! Service %s could not be invoked successfully\n", pp->promiser);
     }

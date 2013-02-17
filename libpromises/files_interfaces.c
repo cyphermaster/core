@@ -38,6 +38,7 @@
 #include "client_code.h"
 #include "logging.h"
 #include "string_lib.h"
+#include "rlist.h"
 
 
 int cfstat(const char *path, struct stat *buf)
@@ -84,7 +85,7 @@ ssize_t CfReadLine(char *buff, size_t size, FILE *fp)
         return -1;
     }
 
-	if (fgets(buff, size, fp) == NULL)
+    if (fgets(buff, size, fp) == NULL)
     {
         *buff = '\0';           /* EOF */
         return 0;

@@ -8,8 +8,7 @@
 
 static void test_createBuffer(void **state)
 {
-    Buffer *buffer = NULL;
-    assert_int_equal(0, BufferNew(&buffer));
+    Buffer *buffer = BufferNew();
     assert_true(buffer != NULL);
     assert_true(buffer->buffer != NULL);
     assert_int_equal(buffer->mode, BUFFER_BEHAVIOR_CSTRING);
@@ -18,14 +17,29 @@ static void test_createBuffer(void **state)
     assert_int_equal(buffer->beginning, 0);
     assert_int_equal(buffer->end, 0);
     assert_true(buffer->ref_count != NULL);
+    assert_int_equal(buffer->ref_count->user_count, 1);    
+}
+
+static void test_createBufferFrom(void **state)
+{
+    const char data[] = "this is some data";
+    unsigned int dataLength = strlen(data);
+    Buffer *buffer = BufferNewFrom(data, dataLength);
+    assert_true(buffer != NULL);
+    assert_true(buffer->buffer != NULL);
+    assert_string_equal(data, buffer->buffer);
+    assert_int_equal(buffer->mode, BUFFER_BEHAVIOR_CSTRING);
+    assert_int_equal(buffer->capacity, DEFAULT_BUFFER_SIZE);
+    assert_int_equal(buffer->used, dataLength);
+    assert_int_equal(buffer->beginning, 0);
+    assert_int_equal(buffer->end, 0);
+    assert_true(buffer->ref_count != NULL);
     assert_int_equal(buffer->ref_count->user_count, 1);
-    assert_int_equal(-1, BufferNew(NULL));
 }
 
 static void test_destroyBuffer(void **state)
 {
-    Buffer *buffer = NULL;
-    assert_int_equal(0, BufferNew(&buffer));
+    Buffer *buffer = BufferNew();
     assert_int_equal(0, BufferDestroy(&buffer));
     assert_true(buffer == NULL);
     assert_int_equal(0, BufferDestroy(NULL));
@@ -42,8 +56,7 @@ static void test_setBuffer(void **state)
     char element2[DEFAULT_MEMORY_CAP * 2];
     unsigned int element2size = 2 * DEFAULT_MEMORY_CAP;
 
-    Buffer *buffer = NULL;
-    assert_int_equal(0, BufferNew(&buffer));
+    Buffer *buffer = BufferNew();
     assert_true(buffer != NULL);
     // Smaller than the allocated buffer
     assert_int_equal(element0size, BufferSet(buffer, element0, element0size));
@@ -78,12 +91,9 @@ static void test_setBuffer(void **state)
     /*
      * Boundary checks, BUFFER_SIZE-1, BUFFER_SIZE and BUFFER_SIZE+1
      */
-    Buffer *bm1 = NULL;
-    assert_int_equal(0, BufferNew(&bm1));
-    Buffer *be = NULL;
-    assert_int_equal(0, BufferNew(&be));
-    Buffer *bp1 = NULL;
-    assert_int_equal(0, BufferNew(&bp1));
+    Buffer *bm1 = BufferNew();
+    Buffer *be = BufferNew();
+    Buffer *bp1 = BufferNew();
     char buffer_m1[DEFAULT_BUFFER_SIZE - 1];
     char buffer_0[DEFAULT_BUFFER_SIZE];
     char buffer_p1[DEFAULT_BUFFER_SIZE + 1];
@@ -132,8 +142,7 @@ static void test_zeroBuffer(void **state)
     unsigned int element0size = strlen(element0);
     const char *element0pointer = NULL;
 
-    Buffer *buffer = NULL;
-    assert_int_equal(0, BufferNew(&buffer));
+    Buffer *buffer = BufferNew();
     assert_int_equal(element0size, BufferSet(buffer, element0, element0size));
     element0pointer = buffer->buffer;
     assert_int_equal(element0size, buffer->used);
@@ -154,13 +163,11 @@ static void test_copyEqualBuffer(void **state)
     char element1[] = "element1";
     unsigned int element1size = strlen(element1);
 
-    Buffer *buffer0 = NULL;
-    Buffer *buffer1 = NULL;
-    Buffer *buffer2 = NULL;
+    Buffer *buffer0 = BufferNew();
+    Buffer *buffer1 = BufferNew();
+    Buffer *buffer2 = BufferNew();
 
     // Empty buffers, all empty buffers are the same
-    assert_int_equal(0, BufferNew(&buffer0));
-    assert_int_equal(0, BufferNew(&buffer1));
     assert_true(BufferEqual(buffer0, buffer0));
     assert_true(BufferEqual(buffer0, buffer1));
     assert_int_equal(0, BufferCopy(buffer0, &buffer2));
@@ -195,8 +202,7 @@ static void test_appendBuffer(void **state)
     char element3[DEFAULT_MEMORY_CAP * 2];
     unsigned int element3size = 2 * DEFAULT_MEMORY_CAP;
 
-    Buffer *buffer = NULL;
-    assert_int_equal(0, BufferNew(&buffer));
+    Buffer *buffer = BufferNew();
     assert_true(buffer != NULL);
     // Initialize the buffer with a small string
     assert_int_equal(element0size, BufferAppend(buffer, element0, element0size));
@@ -262,12 +268,9 @@ static void test_appendBuffer(void **state)
     /*
      * Boundary checks, BUFFER_SIZE-1, BUFFER_SIZE and BUFFER_SIZE+1
      */
-    Buffer *bm1 = NULL;
-    assert_int_equal(0, BufferNew(&bm1));
-    Buffer *be = NULL;
-    assert_int_equal(0, BufferNew(&be));
-    Buffer *bp1 = NULL;
-    assert_int_equal(0, BufferNew(&bp1));
+    Buffer *bm1 = BufferNew();
+    Buffer *be = BufferNew();
+    Buffer *bp1 = BufferNew();
     char buffer_m1[DEFAULT_BUFFER_SIZE - 1];
     char buffer_0[DEFAULT_BUFFER_SIZE];
     char buffer_p1[DEFAULT_BUFFER_SIZE + 1];
@@ -328,8 +331,7 @@ static void test_printf(void **state)
     char element3[DEFAULT_MEMORY_CAP * 2];
     unsigned int element3size = 2 * DEFAULT_MEMORY_CAP;
 
-    Buffer *buffer = NULL;
-    assert_int_equal(0, BufferNew(&buffer));
+    Buffer *buffer = BufferNew();
     assert_true(buffer != NULL);
     /*
      * Print the first char and compare the result
@@ -381,9 +383,7 @@ static void test_printf(void **state)
     for (i = 0; i < char2size; ++i)
         char2[i] = 'a';
     char2[char2size] = '\0';
-    // The first time, the buffer is too small.
-    assert_int_equal(0, BufferPrintf(buffer, "%s", char2));
-    // The second time there is enough space
+    // The buffer should grow
     assert_int_equal(char2size, BufferPrintf(buffer, "%s", char2));
     assert_string_equal(char2, buffer->buffer);
     assert_string_equal(char2, BufferData(buffer));
@@ -402,12 +402,9 @@ static void test_printf(void **state)
     /*
      * Boundary checks, BUFFER_SIZE-1, BUFFER_SIZE and BUFFER_SIZE+1
      */
-    Buffer *bm1 = NULL;
-    assert_int_equal(0, BufferNew(&bm1));
-    Buffer *be = NULL;
-    assert_int_equal(0, BufferNew(&be));
-    Buffer *bp1 = NULL;
-    assert_int_equal(0, BufferNew(&bp1));
+    Buffer *bm1 = BufferNew();
+    Buffer *be = BufferNew();
+    Buffer *bp1 = BufferNew();
     /*
      * The sizes are different for printf. If we have a size of X, then the string
      * is of length X-1, and so forth.
@@ -442,7 +439,6 @@ static void test_printf(void **state)
      * This means retrying the operation.
      */
     buffer_0[DEFAULT_BUFFER_SIZE] = '\0';
-    assert_int_equal(0, BufferPrintf(be, "%s", buffer_0));
     assert_int_equal(be_size, BufferPrintf(be, "%s", buffer_0));
     assert_string_equal(buffer_0, be->buffer);
     assert_int_equal(be->capacity, 2 * DEFAULT_BUFFER_SIZE);
@@ -451,7 +447,6 @@ static void test_printf(void **state)
      * This means retrying the operation.
      */
     buffer_p1[DEFAULT_BUFFER_SIZE + 1] = '\0';
-    assert_int_equal(0, BufferPrintf(bp1, "%s", buffer_p1));
     assert_int_equal(bp1_size, BufferPrintf(bp1, "%s", buffer_p1));
     assert_string_equal(buffer_p1, bp1->buffer);
     assert_int_equal(bp1->capacity, 2 * DEFAULT_BUFFER_SIZE);
@@ -488,8 +483,7 @@ static void test_vprintf(void **state)
     char element3[DEFAULT_MEMORY_CAP * 2];
     unsigned int element3size = 2 * DEFAULT_MEMORY_CAP;
 
-    Buffer *buffer = NULL;
-    assert_int_equal(0, BufferNew(&buffer));
+    Buffer *buffer = BufferNew();
     assert_true(buffer != NULL);
     /*
      * Print the first char and compare the result
@@ -541,9 +535,7 @@ static void test_vprintf(void **state)
     for (i = 0; i < char2size; ++i)
         char2[i] = 'a';
     char2[char2size] = '\0';
-    // The first time, the buffer is too small.
-    assert_int_equal(0, test_vprintf_helper(buffer, "%s", char2));
-    // The second time there is enough space
+    // The buffer should resize itself
     assert_int_equal(char2size, test_vprintf_helper(buffer, "%s", char2));
     assert_string_equal(char2, buffer->buffer);
     assert_string_equal(char2, BufferData(buffer));
@@ -562,12 +554,9 @@ static void test_vprintf(void **state)
     /*
      * Boundary checks, BUFFER_SIZE-1, BUFFER_SIZE and BUFFER_SIZE+1
      */
-    Buffer *bm1 = NULL;
-    assert_int_equal(0, BufferNew(&bm1));
-    Buffer *be = NULL;
-    assert_int_equal(0, BufferNew(&be));
-    Buffer *bp1 = NULL;
-    assert_int_equal(0, BufferNew(&bp1));
+    Buffer *bm1 = BufferNew();
+    Buffer *be = BufferNew();
+    Buffer *bp1 = BufferNew();
     /*
      * The sizes are different for printf. If we have a size of X, then the string
      * is of length X-1, and so forth.
@@ -602,7 +591,6 @@ static void test_vprintf(void **state)
      * This means retrying the operation.
      */
     buffer_0[DEFAULT_BUFFER_SIZE] = '\0';
-    assert_int_equal(0, test_vprintf_helper(be, "%s", buffer_0));
     assert_int_equal(be_size, test_vprintf_helper(be, "%s", buffer_0));
     assert_string_equal(buffer_0, be->buffer);
     assert_int_equal(be->capacity, 2 * DEFAULT_BUFFER_SIZE);
@@ -611,7 +599,6 @@ static void test_vprintf(void **state)
      * This means retrying the operation.
      */
     buffer_p1[DEFAULT_BUFFER_SIZE + 1] = '\0';
-    assert_int_equal(0, test_vprintf_helper(bp1, "%s", buffer_p1));
     assert_int_equal(bp1_size, test_vprintf_helper(bp1, "%s", buffer_p1));
     assert_string_equal(buffer_p1, bp1->buffer);
     assert_int_equal(bp1->capacity, 2 * DEFAULT_BUFFER_SIZE);
@@ -621,6 +608,7 @@ int main()
 {
     const UnitTest tests[] = {
         unit_test(test_createBuffer)
+        , unit_test(test_createBufferFrom)
         , unit_test(test_destroyBuffer)
         , unit_test(test_zeroBuffer)
         , unit_test(test_copyEqualBuffer)

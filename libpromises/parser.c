@@ -40,6 +40,9 @@ static void ParserStateReset()
     P.list_nesting = 0;
     P.arg_nesting = 0;
 
+    free(P.current_namespace);
+    P.current_namespace = xstrdup("default");
+
     P.currentid[0] = '\0';
     P.currentstring = NULL;
     P.currenttype[0] = '\0';
@@ -51,10 +54,10 @@ static void ParserStateReset()
     P.blocktype[0] = '\0';
 }
 
-Policy *ParserParseFile(Policy *policy, const char *path)
+Policy *ParserParseFile(const char *path)
 {
     ParserStateReset();
-    P.policy = policy;
+    P.policy = PolicyNew();
 
     strncpy(P.filename, path, CF_MAXVARSIZE);
 

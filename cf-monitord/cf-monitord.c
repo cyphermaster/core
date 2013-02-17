@@ -23,7 +23,7 @@
 */
 
 #include "generic_agent.h"
-#include "monitoring.h"
+#include "mon.h"
 
 #include "env_context.h"
 #include "env_monitor.h"
@@ -98,8 +98,12 @@ int main(int argc, char *argv[])
 {
     GenericAgentConfig *config = CheckOpts(argc, argv);
 
-    ReportContext *report_context = OpenReports("monitor");
-    Policy *policy = GenericInitialize("monitor", config, report_context);
+    ReportContext *report_context = OpenReports(config->agent_type);
+    GenericAgentDiscoverContext(config, report_context);
+    Policy *policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+
+    CheckLicenses();
+
     ThisAgentInit();
     KeepPromises(policy, report_context);
 
@@ -171,7 +175,7 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             exit(0);
 
         case 'x':
-            SelfDiagnostic();
+            CfOut(cf_error, "", "Self-diagnostic functionality is retired.");
             exit(0);
 
         default:
@@ -203,7 +207,7 @@ static void KeepPromises(Policy *policy, const ReportContext *report_context)
                 continue;
             }
 
-            if (GetVariable("control_monitor", cp->lval, &retval) == cf_notype)
+            if (GetVariable("control_monitor", cp->lval, &retval) == DATA_TYPE_NONE)
             {
                 CfOut(cf_error, "", "Unknown lval %s in monitor control body", cp->lval);
                 continue;

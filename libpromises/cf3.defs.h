@@ -26,7 +26,6 @@
 #define CFENGINE_CF3_DEFS_H
 
 #include "platform.h"
-#include "rlist.h"
 #include "compiler.h"
 
 #ifdef HAVE_LIBXML2
@@ -204,35 +203,6 @@ typedef struct
 # define EXEC_SUFFIX ""
 #endif /* !__MINGW32__ */
 
-/*******************************************************************/
-/* Client server defines                                           */
-/*******************************************************************/
-
-enum PROTOS
-{
-    cfd_exec,
-    cfd_auth,
-    cfd_get,
-    cfd_opendir,
-    cfd_synch,
-    cfd_classes,
-    cfd_md5,
-    cfd_smd5,
-    cfd_cauth,
-    cfd_sauth,
-    cfd_ssynch,
-    cfd_sget,
-    cfd_version,
-    cfd_sopendir,
-    cfd_var,
-    cfd_svar,
-    cfd_context,
-    cfd_scontext,
-    cfd_squery,
-    cfd_call_me_back,
-    cfd_bad
-};
-
 #define CF_WORDSIZE 8           /* Number of bytes in a word */
 
 /*******************************************************************/
@@ -246,14 +216,6 @@ enum cf_filetype
     cf_block,
     cf_char,
     cf_sock
-};
-
-/*******************************************************************/
-
-enum roles
-{
-    cf_connect,
-    cf_accept
 };
 
 /*******************************************************************/
@@ -302,11 +264,11 @@ enum cfsizes
 
 /*******************************************************************/
 
-enum statepolicy
+typedef enum
 {
-    cfreset,                    /* Policy when trying to add already defined persistent states */
-    cfpreserve
-};
+    CONTEXT_STATE_POLICY_RESET,                    /* Policy when trying to add already defined persistent states */
+    CONTEXT_STATE_POLICY_PRESERVE
+} ContextStatePolicy;
 
 /*******************************************************************/
 
@@ -333,17 +295,6 @@ enum classes
 };
 
 /*******************************************************************/
-
-enum iptypes
-{
-    icmp,
-    udp,
-    dns,
-    tcpsyn,
-    tcpack,
-    tcpfin,
-    tcpmisc
-};
 
 enum observables
 {
@@ -506,20 +457,6 @@ struct GidList_
 
 /*******************************************************************/
 
-enum matchtypes
-{
-    literalStart,
-    literalComplete,
-    literalSomewhere,
-    regexComplete,
-    NOTliteralStart,
-    NOTliteralComplete,
-    NOTliteralSomewhere,
-    NOTregexComplete
-};
-
-/*******************************************************************/
-
 typedef struct Auth_ Auth;
 
 struct Auth_
@@ -563,15 +500,10 @@ typedef struct
 /* Fundamental (meta) types                                              */
 /*************************************************************************/
 
-#define CF_SCALAR 's'
-#define CF_LIST   'l'
-#define CF_FNCALL 'f'
 #define CF_STACK  'k'
-#define CF_ASSOC  'a'
 
 #define CF_MAPPEDLIST '#'
 
-#define CF_NOPROMISEE 'X'
 #define CF_UNDEFINED -1
 #define CF_NODOUBLE -123.45
 #define CF_NOINT    -678L
@@ -609,52 +541,25 @@ typedef struct FnCall_ FnCall;
 /* Abstract datatypes                                                    */
 /*************************************************************************/
 
-enum cfdatatype
+typedef enum
 {
-    cf_str,
-    cf_int,
-    cf_real,
-    cf_slist,
-    cf_ilist,
-    cf_rlist,
-    cf_opts,
-    cf_olist,
-    cf_body,
-    cf_bundle,
-    cf_class,
-    cf_clist,
-    cf_irange,
-    cf_rrange,
-    cf_counter,
-    cf_notype
-};
-
-enum cfx_formatindex
-{
-    cfb,
-    cfe,
-};
-
-enum cfx_format
-{
-    cfx_head,
-    cfx_bundle,
-    cfx_block,
-    cfx_blockheader,
-    cfx_blockid,
-    cfx_blocktype,
-    cfx_args,
-    cfx_promise,
-    cfx_class,
-    cfx_subtype,
-    cfx_object,
-    cfx_lval,
-    cfx_rval,
-    cfx_qstring,
-    cfx_rlist,
-    cfx_function,
-    cfx_line,
-};
+    DATA_TYPE_STRING,
+    DATA_TYPE_INT,
+    DATA_TYPE_REAL,
+    DATA_TYPE_STRING_LIST,
+    DATA_TYPE_INT_LIST,
+    DATA_TYPE_REAL_LIST,
+    DATA_TYPE_OPTION,
+    DATA_TYPE_OPTION_LIST,
+    DATA_TYPE_BODY,
+    DATA_TYPE_BUNDLE,
+    DATA_TYPE_CONTEXT,
+    DATA_TYPE_CONTEXT_LIST,
+    DATA_TYPE_INT_RANGE,
+    DATA_TYPE_REAL_RANGE,
+    DATA_TYPE_COUNTER,
+    DATA_TYPE_NONE
+} DataType;
 
 /*************************************************************************/
 
@@ -685,27 +590,6 @@ typedef enum
     AGENT_TYPE_GENDOC,
     AGENT_TYPE_NOAGENT
 } AgentType;
-
-enum typesequence
-{
-    kp_meta,
-    kp_vars,
-    kp_defaults,
-    kp_classes,
-    kp_outputs,
-    kp_interfaces,
-    kp_files,
-    kp_packages,
-    kp_environments,
-    kp_methods,
-    kp_processes,
-    kp_services,
-    kp_commands,
-    kp_storage,
-    kp_databases,
-    kp_reports,
-    kp_none
-};
 
 /*************************************************************************/
 
@@ -1000,25 +884,37 @@ enum cfeditorder
 
 typedef enum
 {
+    RVAL_TYPE_SCALAR = 's',
+    RVAL_TYPE_LIST = 'l',
+    RVAL_TYPE_FNCALL = 'f',
+    RVAL_TYPE_ASSOC = 'a',
+    RVAL_TYPE_NOPROMISEE = 'X' // TODO: must be another hack
+} RvalType;
+
+typedef struct
+{
+    void *item;
+    RvalType type;
+} Rval;
+
+typedef struct Rlist_ Rlist;
+
+typedef enum
+{
     REPORT_OUTPUT_TYPE_TEXT,
-    REPORT_OUTPUT_TYPE_HTML,
     REPORT_OUTPUT_TYPE_KNOWLEDGE,
 
     REPORT_OUTPUT_TYPE_MAX
 } ReportOutputType;
 
-typedef struct
-{
-    Writer *report_writers[REPORT_OUTPUT_TYPE_MAX];
-} ReportContext;
-
+typedef struct ReportContext_ ReportContext;
 
 /*************************************************************************/
 
 typedef struct
 {
     const char *lval;
-    const enum cfdatatype dtype;
+    const DataType dtype;
     const void *range;          /* either char or BodySyntax * */
     const char *description;
     const char *default_value;
@@ -1040,14 +936,14 @@ typedef struct FnCallResult_ FnCallResult;
 typedef struct
 {
     const char *pattern;
-    enum cfdatatype dtype;
+    DataType dtype;
     const char *description;
 } FnCallArg;
 
 typedef struct
 {
     const char *name;
-    enum cfdatatype dtype;
+    DataType dtype;
     const FnCallArg *args;
               FnCallResult(*impl) (FnCall *, Rlist *);
     const char *description;
@@ -1068,15 +964,20 @@ typedef struct
     size_t context;
 } SourceOffset;
 
+// TODO: remove eventually, all policy DOM objects should probably
+// just go into policy.h
+#include "sequence.h"
+
 struct Bundle_
 {
     Policy *parent_policy;
 
     char *type;
     char *name;
-    char *namespace;
+    char *ns;
     Rlist *args;
-    SubType *subtypes;
+
+    Seq *subtypes;
 
     char *source_path;
     SourceOffset offset;
@@ -1086,17 +987,13 @@ struct Bundle_
 
 typedef struct Constraint_ Constraint;
 
-// TODO: remove eventually, all policy DOM objects should probably
-// just go into policy.h
-#include "sequence.h"
-
 struct Body_
 {
     Policy *parent_policy;
 
     char *type;
     char *name;
-    char *namespace;
+    char *ns;
     Rlist *args;
 
     Seq *conlist;
@@ -1112,8 +1009,7 @@ struct SubType_
     Bundle *parent_bundle;
 
     char *name;
-    Promise *promiselist;
-    SubType *next;
+    Seq *promises;
 
     SourceOffset offset;
 };
@@ -1146,7 +1042,6 @@ struct Promise_
     Rval promisee;
     char *bundle;
     Audit *audit;
-    Promise *next;
 
     Seq *conlist;
 
@@ -1154,7 +1049,7 @@ struct Promise_
 
     char *agentsubtype;         /* cache the promise subtype */
     char *bundletype;           /* cache the agent type */
-    char *namespace;            /* cache the namespace */
+    char *ns;                   /* cache the namespace */
     int done;                   /* this needs to be preserved across runs */
     int *donep;                 /* used by locks to mark as done */
     int makeholes;
@@ -1180,28 +1075,6 @@ typedef struct PromiseIdent_
     int line_number;
     struct PromiseIdent_ *next;
 } PromiseIdent;
-
-/*************************************************************************/
-/* Rvalues and lists - basic workhorse structure                         */
-/*************************************************************************/
-
-/*
-  In an OO language one would probably think of Rval as a parent class
-  and CF_SCALAR, CF_LIST and CF_FNCALL as children. There is more or
-  less a sub-type polymorphism going on in the code around these structures,
-  but it is not a proper inheritance relationship as lists could
-  contain functions which return lists or scalars etc..
-
-*/
-
-/*************************************************************************/
-
-struct FnCall_
-{
-    char *name;
-    Rlist *args;
-    char *namespace;
-};
 
 /*******************************************************************/
 /* Variable processing                                             */
@@ -1609,7 +1482,7 @@ typedef struct
     Rlist *kept;
     Rlist *interrupt;
     int persist;
-    enum statepolicy timer;
+    ContextStatePolicy timer;
     Rlist *del_change;
     Rlist *del_kept;
     Rlist *del_notkept;
@@ -1757,7 +1630,7 @@ typedef struct
 typedef struct
 {
     unsigned int expires;
-    enum statepolicy policy;
+    ContextStatePolicy policy;
 } CfState;
 
 /*************************************************************************/
@@ -2073,7 +1946,7 @@ enum cfmeasurepolicy
 typedef struct
 {
     char *stream_type;
-    enum cfdatatype data_type;
+    DataType data_type;
     enum cfmeasurepolicy policy;
     char *history_type;
     char *select_line_matching;
@@ -2328,11 +2201,6 @@ extern const SubTypeSyntax CF_COMMON_SUBTYPES[];
 extern const BodySyntax CF_CLASSBODY[];
 extern const BodySyntax CFA_CONTROLBODY[];
 extern const BodySyntax CFEX_CONTROLBODY[];
-
-#ifdef HAVE_NOVA
-# include <cf.nova.h>
-#endif
-
 
 #endif
 

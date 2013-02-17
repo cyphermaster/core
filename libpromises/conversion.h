@@ -28,6 +28,7 @@
 
 #include "cf3.defs.h"
 
+const char *AgentTypeToString(AgentType agent_type);
 char *EscapeJson(char *s, char *out, int outSz);
 char *EscapeQuotes(const char *s, char *out, int outSz);
 char *MapAddress(char *addr);
@@ -41,12 +42,10 @@ enum cfdbtype Str2dbType(char *s);
 char *Rlist2String(Rlist *list, char *sep);
 int Signal2Int(char *s);
 enum cfreport String2ReportLevel(char *typestr);
-enum cfhashes String2HashType(char *typestr);
 enum cfcomparison String2Comparison(char *s);
 enum cflinktype String2LinkType(char *s);
-enum cfdatatype Typename2Datatype(char *name);
-enum cfdatatype GetControlDatatype(const char *varname, const BodySyntax *bp);
-AgentType Agent2Type(const char *name);
+DataType Typename2Datatype(char *name);
+DataType GetControlDatatype(const char *varname, const BodySyntax *bp);
 enum cfsbundle Type2Cfs(char *name);
 enum representations String2Representation(char *s);
 int GetBoolean(const char *val);
@@ -69,7 +68,7 @@ enum cf_acl_method Str2AclMethod(char *string);
 enum cf_acl_type Str2AclType(char *string);
 enum cf_acl_inherit Str2AclInherit(char *string);
 enum cf_srv_policy Str2ServicePolicy(char *string);
-char *Dtype2Str(enum cfdatatype dtype);
+char *Dtype2Str(DataType dtype);
 const char *DataTypeShortToType(char *short_type);
 char *Item2String(Item *ip);
 int IsRealNumber(char *s);

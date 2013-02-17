@@ -39,6 +39,7 @@
 #include "logging.h"
 #include "verify_outputs.h"
 #include "generic_agent.h" // HashVariables
+#include "fncall.h"
 
 static void GetReturnValue(char *scope, Promise *pp);
     
@@ -69,13 +70,13 @@ int VerifyMethod(char *attrname, Attributes a, Promise *pp, const ReportContext 
 
     if (a.havebundle)
     {
-        if ((vp = GetConstraintValue(attrname, pp, CF_FNCALL)))
+        if ((vp = GetConstraintValue(attrname, pp, RVAL_TYPE_FNCALL)))
         {
             fp = (FnCall *) vp;
             ExpandScalar(fp->name, method_name);
             params = fp->args;
         }
-        else if ((vp = GetConstraintValue(attrname, pp, CF_SCALAR)))
+        else if ((vp = GetConstraintValue(attrname, pp, RVAL_TYPE_SCALAR)))
         {
             ExpandScalar((char *) vp, method_name);
             params = NULL;
@@ -101,9 +102,9 @@ int VerifyMethod(char *attrname, Attributes a, Promise *pp, const ReportContext 
     {
         method_deref = strchr(method_name, CF_NS) + 1;
     }
-    else if ((strchr(method_name, CF_NS) == NULL) && (strcmp(pp->namespace, "default") != 0))
+    else if ((strchr(method_name, CF_NS) == NULL) && (strcmp(pp->ns, "default") != 0))
     {
-        snprintf(qualified_method, CF_BUFSIZE, "%s%c%s", pp->namespace, CF_NS, method_name);
+        snprintf(qualified_method, CF_BUFSIZE, "%s%c%s", pp->ns, CF_NS, method_name);
         method_deref = qualified_method;
     }
     else
@@ -111,7 +112,13 @@ int VerifyMethod(char *attrname, Attributes a, Promise *pp, const ReportContext 
          method_deref = method_name;
     }
     
-    if ((bp = GetBundle(PolicyFromPromise(pp), method_deref, "agent")))
+    bp = PolicyGetBundle(PolicyFromPromise(pp), NULL, "agent", method_deref);
+    if (!bp)
+    {
+        bp = PolicyGetBundle(PolicyFromPromise(pp), NULL, "common", method_deref);
+    }
+
+    if (bp)
     {
         const char *bp_stack = THIS_BUNDLE;
 
@@ -121,12 +128,12 @@ int VerifyMethod(char *attrname, Attributes a, Promise *pp, const ReportContext 
         NewScope(bp->name);
         HashVariables(PolicyFromPromise(pp), bp->name, report_context);
 
-        char namespace[CF_BUFSIZE];
-        snprintf(namespace,CF_BUFSIZE,"%s_meta",method_name);
-        NewScope(namespace);
+        char ns[CF_BUFSIZE];
+        snprintf(ns,CF_BUFSIZE,"%s_meta",method_name);
+        NewScope(ns);
         SetBundleOutputs(bp->name);
 
-        AugmentScope(method_deref, pp->namespace, bp->args, params);
+        AugmentScope(method_deref, pp->ns, bp->args, params);
 
         THIS_BUNDLE = bp->name;
         PushPrivateClassContext(a.inherit);
@@ -184,7 +191,7 @@ int VerifyMethod(char *attrname, Attributes a, Promise *pp, const ReportContext 
 
 static void GetReturnValue(char *scope, Promise *pp)
 {
-    char *result = GetConstraintValue("useresult", pp, CF_SCALAR);
+    char *result = GetConstraintValue("useresult", pp, RVAL_TYPE_SCALAR);
 
     if (result)
     {
@@ -230,7 +237,7 @@ static void GetReturnValue(char *scope, Promise *pp)
                     snprintf(newname, CF_BUFSIZE, "%s", result);
                 }
 
-                NewScalar(pp->bundle, newname, assoc->rval.item, cf_str);           
+                NewScalar(pp->bundle, newname, assoc->rval.item, DATA_TYPE_STRING);           
             }
         }
         

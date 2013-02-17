@@ -44,6 +44,7 @@
 #include "transaction.h"
 #include "logging.h"
 #include "exec_tools.h"
+#include "rlist.h"
 
 #define CF_EXEC_IFELAPSED 0
 #define CF_EXEC_EXPIREAFTER 1
@@ -127,8 +128,28 @@ int main(int argc, char *argv[])
 {
     GenericAgentConfig *config = CheckOpts(argc, argv);
 
-    ReportContext *report_context = OpenReports("executor");
-    Policy *policy = GenericInitialize("executor", config, report_context);
+    ReportContext *report_context = OpenReports(config->agent_type);
+    GenericAgentDiscoverContext(config, report_context);
+
+    Policy *policy = NULL;
+    if (GenericAgentCheckPolicy(config, report_context, false))
+    {
+        policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+    }
+    else if (config->tty_interactive)
+    {
+        FatalError("CFEngine was not able to get confirmation of promises from cf-promises, please verify input file\n");
+    }
+    else
+    {
+        CfOut(cf_error, "", "CFEngine was not able to get confirmation of promises from cf-promises, so going to failsafe\n");
+        HardClass("failsafe_fallback");
+        GenericAgentConfigSetInputFile(config, "failsafe.cf");
+        policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+    }
+
+    CheckLicenses();
+
     ThisAgentInit();
 
     ExecConfig exec_config = {
@@ -253,7 +274,7 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             exit(0);
 
         case 'x':
-            SelfDiagnostic();
+            CfOut(cf_error, "", "Self-diagnostic functionality is retired.");
             exit(0);
 
         default:
@@ -333,7 +354,7 @@ void KeepPromises(Policy *policy, ExecConfig *config)
             }
 
             Rval retval;
-            if (GetVariable("control_executor", cp->lval, &retval) == cf_notype)
+            if (GetVariable("control_executor", cp->lval, &retval) == DATA_TYPE_NONE)
             {
                 CfOut(cf_error, "", "Unknown lval %s in exec control body", cp->lval);
                 continue;
@@ -387,7 +408,7 @@ void KeepPromises(Policy *policy, ExecConfig *config)
 
             if (strcmp(cp->lval, CFEX_CONTROLBODY[cfex_splaytime].lval) == 0)
             {
-                int time = Str2Int(ScalarRvalValue(retval));
+                int time = Str2Int(RvalScalarValue(retval));
 
                 SPLAYTIME = (int) (time * SECONDS_PER_MINUTE * GetSplay());
             }
@@ -445,7 +466,7 @@ void StartServer(Policy *policy, GenericAgentConfig *config, ExecConfig *exec_co
 
         if (thislock.lock == NULL)
         {
-            DeletePromise(pp);
+            PromiseDestroy(pp);
             return;
         }
 
@@ -586,7 +607,7 @@ static void Apoptosis()
 #endif
 
     pp.promiser = promiser_buf;
-    pp.promisee = (Rval) {"cfengine", CF_SCALAR};
+    pp.promisee = (Rval) {"cfengine", RVAL_TYPE_SCALAR};
     pp.classes = "any";
     pp.offset.line = 0;
     pp.audit = NULL;
@@ -597,7 +618,6 @@ static void Apoptosis()
     pp.ref = "Programmed death";
     pp.agentsubtype = "processes";
     pp.done = false;
-    pp.next = NULL;
     pp.cache = NULL;
     pp.inode_cache = NULL;
     pp.this_server = NULL;
@@ -606,16 +626,16 @@ static void Apoptosis()
 
     GetCurrentUserName(mypid, 31);
 
-    PrependRlist(&signals, "term", CF_SCALAR);
-    PrependRlist(&owners, mypid, CF_SCALAR);
+    RlistPrepend(&signals, "term", RVAL_TYPE_SCALAR);
+    RlistPrepend(&owners, mypid, RVAL_TYPE_SCALAR);
 
-    ConstraintAppendToPromise(&pp, "signals", (Rval) {signals, CF_LIST}, "any", false);
-    ConstraintAppendToPromise(&pp, "process_select", (Rval) {xstrdup("true"), CF_SCALAR}, "any", false);
-    ConstraintAppendToPromise(&pp, "process_owner", (Rval) {owners, CF_LIST}, "any", false);
-    ConstraintAppendToPromise(&pp, "ifelapsed", (Rval) {xstrdup("0"), CF_SCALAR}, "any", false);
-    ConstraintAppendToPromise(&pp, "process_count", (Rval) {xstrdup("true"), CF_SCALAR}, "any", false);
-    ConstraintAppendToPromise(&pp, "match_range", (Rval) {xstrdup("0,2"), CF_SCALAR}, "any", false);
-    ConstraintAppendToPromise(&pp, "process_result", (Rval) {xstrdup("process_owner.process_count"), CF_SCALAR}, "any", false);
+    PromiseAppendConstraint(&pp, "signals", (Rval) {signals, RVAL_TYPE_LIST }, "any", false);
+    PromiseAppendConstraint(&pp, "process_select", (Rval) {xstrdup("true"), RVAL_TYPE_SCALAR}, "any", false);
+    PromiseAppendConstraint(&pp, "process_owner", (Rval) {owners, RVAL_TYPE_LIST }, "any", false);
+    PromiseAppendConstraint(&pp, "ifelapsed", (Rval) {xstrdup("0"), RVAL_TYPE_SCALAR}, "any", false);
+    PromiseAppendConstraint(&pp, "process_count", (Rval) {xstrdup("true"), RVAL_TYPE_SCALAR}, "any", false);
+    PromiseAppendConstraint(&pp, "match_range", (Rval) {xstrdup("0,2"), RVAL_TYPE_SCALAR}, "any", false);
+    PromiseAppendConstraint(&pp, "process_result", (Rval) {xstrdup("process_owner.process_count"), RVAL_TYPE_SCALAR}, "any", false);
 
     CfOut(cf_verbose, "", " -> Looking for cf-execd processes owned by %s", mypid);
 
@@ -639,13 +659,13 @@ typedef enum
     RELOAD_FULL
 } Reload;
 
-static Reload CheckNewPromises(const char *input_file, const ReportContext *report_context)
+static Reload CheckNewPromises(const char *input_file, const Rlist *input_files, const ReportContext *report_context)
 {
-    if (NewPromiseProposals(input_file))
+    if (NewPromiseProposals(input_file, input_files))
     {
         CfOut(cf_verbose, "", " -> New promises detected...\n");
 
-        if (CheckPromises(AGENT_TYPE_EXECUTOR, input_file, report_context))
+        if (CheckPromises(input_file, report_context))
         {
             return RELOAD_FULL;
         }
@@ -682,7 +702,7 @@ static bool ScheduleRun(Policy **policy, GenericAgentConfig *config, ExecConfig 
      * FIXME: this logic duplicates the one from cf-serverd.c. Unify ASAP.
      */
 
-    if (CheckNewPromises(config->input_file, report_context) == RELOAD_FULL)
+    if (CheckNewPromises(config->input_file, InputFiles(*policy), report_context) == RELOAD_FULL)
     {
         /* Full reload */
 
@@ -706,7 +726,6 @@ static bool ScheduleRun(Policy **policy, GenericAgentConfig *config, ExecConfig 
         POLICY_SERVER[0] = '\0';
 
         VNEGHEAP = NULL;
-        VINPUTLIST = NULL;
 
         PolicyDestroy(*policy);
         *policy = NULL;
@@ -716,7 +735,7 @@ static bool ScheduleRun(Policy **policy, GenericAgentConfig *config, ExecConfig 
         NewScope("sys");
 
         SetPolicyServer(POLICY_SERVER);
-        NewScalar("sys", "policy_hub", POLICY_SERVER, cf_str);
+        NewScalar("sys", "policy_hub", POLICY_SERVER, DATA_TYPE_STRING);
 
         NewScope("const");
         NewScope("this");
@@ -737,7 +756,7 @@ static bool ScheduleRun(Policy **policy, GenericAgentConfig *config, ExecConfig 
 
         GenericAgentConfigSetBundleSequence(config, NULL);
 
-        *policy = ReadPromises(AGENT_TYPE_EXECUTOR, CF_EXECC, config, report_context);
+        *policy = GenericAgentLoadPolicy(AGENT_TYPE_EXECUTOR, config, report_context);
         KeepPromises(*policy, exec_config);
     }
     else

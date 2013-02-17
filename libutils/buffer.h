@@ -27,6 +27,7 @@
 
 #include <stdarg.h>
 #include "refcount.h"
+#include "compiler.h"
 
 /**
   @brief Buffer implementation
@@ -75,12 +76,23 @@ void BufferSetGeneralMemoryCap(unsigned int cap);
 
 /**
   @brief Buffer initialization routine.
+
   Initializes the internals of a buffer. By default it is initialized to emulate a C string, but that can be
   changed at run time if needed. The default size of the buffer is set to DEFAULT_BUFFER_SIZE (4096).
-  @param buffer Buffer to be initialized.
-  @return 0 if the initialization was successful, -1 otherwise.
+  @return Pointer to initialized Buffer if the initialization was successful,
+          otherwise terminate with message to stderr.
   */
-int BufferNew(Buffer **buffer);
+Buffer* BufferNew(void);
+/**
+  @brief Initializes a buffer based on a const char pointer.
+  @param data Data
+  @param length Length of the data.
+  @return Pointer to initialized Buffer if the initialization was successful,
+          otherwise terminate with message to stderr.
+  @remarks Length is used as a reference only. If a '\0' is found, only so many bytes will be copied.
+  @remarks Only C_STRING behavior is accepted if this constructor is used.
+  */
+Buffer* BufferNewFrom(const char *data, unsigned int length);
 /**
   @brief Destroys a buffer and frees the memory associated with it.
   @param buffer Buffer to be destroyed.
@@ -143,7 +155,7 @@ int BufferAppend(Buffer *buffer, char *bytes, unsigned int length);
   @param format
   @return The number of bytes written to the buffer or 0 if the operation needs to be retried. In case of error -1 is returned.
   */
-int BufferPrintf(Buffer *buffer, const char *format, ...);
+int BufferPrintf(Buffer *buffer, const char *format, ...) FUNC_ATTR_PRINTF(2, 3);
 /**
   @brief Stores complex data on the buffer.
 

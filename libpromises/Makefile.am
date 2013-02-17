@@ -42,7 +42,6 @@ libpromises_la_SOURCES = \
         dbm_quick.c \
         dbm_tokyocab.c \
         dir.c dir.h dir_priv.h \
-        dtypes.c \
         enterprise_stubs.c \
         env_context.c env_context.h \
         evalfunction.c evalfunction.h \
@@ -58,7 +57,6 @@ libpromises_la_SOURCES = \
         full_write.c \
         generic_agent.c generic_agent.h \
         granules.c granules.h \
-        html.c \
         instrumentation.c instrumentation.h \
         item_lib.c item_lib.h \
         iteration.c iteration.h \
@@ -96,7 +94,6 @@ libpromises_la_SOURCES = \
         reporting.c reporting.h \
         rlist.c rlist.h \
         scope.c scope.h \
-        selfdiagnostic.c \
         signals.c signals.h \
         sockaddr.c \
         sort.c sort.h \

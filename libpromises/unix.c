@@ -38,6 +38,7 @@
 #include "logging.h"
 #include "exec_tools.h"
 #include "misc_lib.h"
+#include "rlist.h"
 
 #ifdef HAVE_SYS_UIO_H
 # include <sys/uio.h>
@@ -389,14 +390,14 @@ static void GetMacAddress(AgentType ag, int fd, struct ifreq *ifr, struct ifreq 
              (unsigned char) ifr->ifr_hwaddr.sa_data[3],
              (unsigned char) ifr->ifr_hwaddr.sa_data[4], (unsigned char) ifr->ifr_hwaddr.sa_data[5]);
 
-    NewScalar("sys", name, hw_mac, cf_str);
-    AppendRlist(hardware, hw_mac, CF_SCALAR);
-    AppendRlist(interfaces, ifp->ifr_name, CF_SCALAR);
+    NewScalar("sys", name, hw_mac, DATA_TYPE_STRING);
+    RlistAppend(hardware, hw_mac, RVAL_TYPE_SCALAR);
+    RlistAppend(interfaces, ifp->ifr_name, RVAL_TYPE_SCALAR);
 
     snprintf(name, CF_MAXVARSIZE, "mac_%s", CanonifyName(hw_mac));
     HardClass(name);
 # else
-    NewScalar("sys", name, "mac_unknown", cf_str);
+    NewScalar("sys", name, "mac_unknown", DATA_TYPE_STRING);
     HardClass("mac_unknown");
 # endif
 }
@@ -472,11 +473,10 @@ void GetInterfacesInfo(AgentType ag)
         
         if (strstr(ifp->ifr_name, ":"))
         {
-            if (VSYSTEMHARDCLASS == linuxx)
-            {
-                CfOut(cf_verbose, "", "Skipping apparent virtual interface %d: %s\n", j + 1, ifp->ifr_name);
-                continue;
-            }
+#ifdef __linux__
+            CfOut(cf_verbose, "", "Skipping apparent virtual interface %d: %s\n", j + 1, ifp->ifr_name);
+            continue;
+#endif
         }
         else
         {
@@ -500,7 +500,7 @@ void GetInterfacesInfo(AgentType ag)
 
             if (!first_address)
             {
-                NewScalar("sys", "interface", last_name, cf_str);
+                NewScalar("sys", "interface", last_name, DATA_TYPE_STRING);
                 first_address = true;
             }
         }
@@ -562,7 +562,7 @@ void GetInterfacesInfo(AgentType ag)
                     strcpy(ip, "ipv4_");
                     strcat(ip, VIPADDRESS);
                     AppendItem(&IPADDRESSES, VIPADDRESS, "");
-                    AppendRlist(&ips, VIPADDRESS, CF_SCALAR);
+                    RlistAppend(&ips, VIPADDRESS, RVAL_TYPE_SCALAR);
 
                     for (sp = ip + strlen(ip) - 1; (sp > ip); sp--)
                     {
@@ -582,7 +582,7 @@ void GetInterfacesInfo(AgentType ag)
                         {
                             *sp = '\0';
                             snprintf(name, CF_MAXVARSIZE - 1, "ipv4_%d[%s]", i--, CanonifyName(VIPADDRESS));
-                            NewScalar("sys", name, ip, cf_str);
+                            NewScalar("sys", name, ip, DATA_TYPE_STRING);
                         }
                     }
                     continue;
@@ -595,13 +595,13 @@ void GetInterfacesInfo(AgentType ag)
                 if (!ipdefault)
                 {
                     ipdefault = true;
-                    NewScalar("sys", "ipv4", inet_ntoa(sin->sin_addr), cf_str);
+                    NewScalar("sys", "ipv4", inet_ntoa(sin->sin_addr), DATA_TYPE_STRING);
 
                     strcpy(VIPADDRESS, inet_ntoa(sin->sin_addr));
                 }
 
                 AppendItem(&IPADDRESSES, inet_ntoa(sin->sin_addr), "");
-                AppendRlist(&ips, inet_ntoa(sin->sin_addr), CF_SCALAR);
+                RlistAppend(&ips, inet_ntoa(sin->sin_addr), RVAL_TYPE_SCALAR);
 
                 for (sp = ip + strlen(ip) - 1; (sp > ip); sp--)
                 {
@@ -625,7 +625,7 @@ void GetInterfacesInfo(AgentType ag)
                     snprintf(name, CF_MAXVARSIZE - 1, "ipv4[interface_name]");
                 }
 
-                NewScalar("sys", name, ip, cf_str);
+                NewScalar("sys", name, ip, DATA_TYPE_STRING);
 
                 i = 3;
 
@@ -644,7 +644,7 @@ void GetInterfacesInfo(AgentType ag)
                             snprintf(name, CF_MAXVARSIZE - 1, "ipv4_%d[interface_name]", i--);
                         }
 
-                        NewScalar("sys", name, ip, cf_str);
+                        NewScalar("sys", name, ip, DATA_TYPE_STRING);
                     }
                 }
             }
@@ -656,13 +656,13 @@ void GetInterfacesInfo(AgentType ag)
 
     close(fd);
 
-    NewList("sys", "interfaces", interfaces, cf_slist);
-    NewList("sys", "hardware_addresses", hardware, cf_slist);
-    NewList("sys", "ip_addresses", ips, cf_slist);
+    NewList("sys", "interfaces", interfaces, DATA_TYPE_STRING_LIST);
+    NewList("sys", "hardware_addresses", hardware, DATA_TYPE_STRING_LIST);
+    NewList("sys", "ip_addresses", ips, DATA_TYPE_STRING_LIST);
 
-    DeleteRlist(interfaces);
-    DeleteRlist(hardware);
-    DeleteRlist(ips);
+    RlistDestroy(interfaces);
+    RlistDestroy(hardware);
+    RlistDestroy(ips);
 
     FindV6InterfacesInfo();
 }
@@ -683,49 +683,40 @@ static void FindV6InterfacesInfo(void)
 
     CfOut(cf_verbose, "", "Trying to locate my IPv6 address\n");
 
-    switch (VSYSTEMHARDCLASS)
+#if defined(__CYGWIN__)
+    /* NT cannot do this */
+    return;
+#elif defined(__hpux)
+    if ((pp = cf_popen("/usr/sbin/ifconfig -a", "r")) == NULL)
     {
-    case cfnt:
-        /* NT cannot do this */
+        CfOut(cf_verbose, "", "Could not find interface info\n");
         return;
-
-    case hp:
-
-        if ((pp = cf_popen("/usr/sbin/ifconfig -a", "r")) == NULL)
-        {
-            CfOut(cf_verbose, "", "Could not find interface info\n");
-            return;
-        }
-
-        break;
-
-    case aix:
-
-        if ((pp = cf_popen("/etc/ifconfig -a", "r")) == NULL)
-        {
-            CfOut(cf_verbose, "", "Could not find interface info\n");
-            return;
-        }
-
-        break;
-
-    default:
-
-        if ((pp = cf_popen("/sbin/ifconfig -a", "r")) == NULL)
-        {
-            CfOut(cf_verbose, "", "Could not find interface info\n");
-            return;
-        }
-
     }
+#elif defined(_AIX)
+    if ((pp = cf_popen("/etc/ifconfig -a", "r")) == NULL)
+    {
+        CfOut(cf_verbose, "", "Could not find interface info\n");
+        return;
+    }
+#else
+    if ((pp = cf_popen("/sbin/ifconfig -a", "r")) == NULL)
+    {
+        CfOut(cf_verbose, "", "Could not find interface info\n");
+        return;
+    }
+#endif
 
 /* Don't know the output format of ifconfig on all these .. hope for the best*/
 
     while (!feof(pp))
     {
+        buffer[0] = '\0';
         if (fgets(buffer, CF_BUFSIZE, pp) == NULL)
         {
-            UnexpectedError("Failed to read line from stream");
+            if (strlen(buffer))
+            {
+                UnexpectedError("Failed to read line from stream");
+            }
         }
 
         if (ferror(pp))         /* abortable */
@@ -787,7 +778,7 @@ static void InitIgnoreInterfaces()
 
         if (scanCount != 0 && *regex != '\0')
         {
-           IdempPrependRScalar(&IGNORE_INTERFACES,regex,CF_SCALAR);
+           RlistPrependScalarIdemp(&IGNORE_INTERFACES,regex, RVAL_TYPE_SCALAR);
         }
     }
  

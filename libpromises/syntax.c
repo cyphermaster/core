@@ -39,6 +39,7 @@
 #include "string_lib.h"
 #include "logging.h"
 #include "misc_lib.h"
+#include "rlist.h"
 
 #include <assert.h>
 
@@ -50,7 +51,7 @@ static void CheckParseReal(const char *lv, const char *s, const char *range);
 static void CheckParseRealRange(const char *lval, const char *s, const char *range);
 static void CheckParseIntRange(const char *lval, const char *s, const char *range);
 static void CheckParseOpts(const char *lv, const char *s, const char *range);
-static void CheckFnCallType(const char *lval, const char *s, enum cfdatatype dtype, const char *range);
+static void CheckFnCallType(const char *lval, const char *s, DataType dtype, const char *range);
 
 
 /*********************************************************/
@@ -82,7 +83,7 @@ SubTypeSyntax SubTypeSyntaxLookup(const char *bundle_type, const char *subtype_n
 
 /****************************************************************************/
 
-enum cfdatatype ExpectedDataType(char *lvalname)
+DataType ExpectedDataType(char *lvalname)
 {
     int i, j, k, l;
     const BodySyntax *bs, *bs2;
@@ -112,7 +113,7 @@ enum cfdatatype ExpectedDataType(char *lvalname)
 
             for (k = 0; bs[k].range != NULL; k++)
             {
-                if (bs[k].dtype == cf_body)
+                if (bs[k].dtype == DATA_TYPE_BODY)
                 {
                     bs2 = (const BodySyntax *) (bs[k].range);
 
@@ -121,7 +122,7 @@ enum cfdatatype ExpectedDataType(char *lvalname)
                         continue;
                     }
 
-                    for (l = 0; bs2[l].dtype != cf_notype; l++)
+                    for (l = 0; bs2[l].dtype != DATA_TYPE_NONE; l++)
                     {
                         if (strcmp(lvalname, bs2[l].lval) == 0)
                         {
@@ -134,12 +135,12 @@ enum cfdatatype ExpectedDataType(char *lvalname)
         }
     }
 
-    return cf_notype;
+    return DATA_TYPE_NONE;
 }
 
 /*********************************************************/
 
-void CheckConstraint(char *type, char *namespace, char *name, char *lval, Rval rval, SubTypeSyntax ss)
+void CheckConstraint(char *type, char *ns, char *name, char *lval, Rval rval, SubTypeSyntax ss)
 {
     int lmatch = false;
     int i, l, allowed = false;
@@ -150,7 +151,7 @@ void CheckConstraint(char *type, char *namespace, char *name, char *lval, Rval r
 
     if (DEBUG)
     {
-        ShowRval(stdout, rval);
+        RvalShow(stdout, rval);
     }
 
     CfDebug(")\n");
@@ -175,47 +176,15 @@ void CheckConstraint(char *type, char *namespace, char *name, char *lval, Rval r
                     lmatch = true;
                     CfDebug("Matched syntatically correct bundle (lval,rval) item = (%s) to its rval\n", lval);
 
-                    if (bs[l].dtype == cf_body)
+                    if (bs[l].dtype == DATA_TYPE_BODY)
                     {
-                    char fqname[CF_BUFSIZE];
-                    FnCall *fp;
-                    
-                    CfDebug("Constraint syntax ok, but definition of body is elsewhere %s=%c\n", lval, rval.rtype);
-
-                    switch (rval.rtype)
-                       {
-                       case CF_SCALAR:
-                           if (strchr((char *)rval.item, CF_NS))
-                           {
-                               strcpy(fqname,(char *)rval.item);
-                           }
-                           else
-                           {
-                               snprintf(fqname,CF_BUFSIZE-1,"%s%c%s", namespace, CF_NS, (char *)rval.item);
-                           }
-                           break;
-                           
-                       case CF_FNCALL:
-                           fp = (FnCall *) rval.item;
-                           if (strchr(fp->name, CF_NS))
-                           {
-                               strcpy(fqname,fp->name);
-                           }
-                           else
-                           {                              
-                               snprintf(fqname,CF_BUFSIZE-1,"%s%c%s", namespace, CF_NS, fp->name);
-                           }
-                           break;
-                       }
-                        
-                        PrependRlist(&BODYPARTS, fqname, CF_SCALAR);
+                        CfDebug("Constraint syntax ok, but definition of body is elsewhere %s=%c\n", lval, rval.type);
                         return;
                     }
-                    else if (bs[l].dtype == cf_bundle)
+                    else if (bs[l].dtype == DATA_TYPE_BUNDLE)
                     {
                         CfDebug("Constraint syntax ok, but definition of relevant bundle is elsewhere %s=%c\n", lval,
-                                rval.rtype);
-                        PrependRlist(&SUBBUNDLES, rval.item, rval.rtype);
+                                rval.type);
                         return;
                     }
                     else
@@ -307,7 +276,7 @@ int LvalWantsBody(char *stype, char *lval)
             {
                 if (strcmp(bs[l].lval, lval) == 0)
                 {
-                    if (bs[l].dtype == cf_body)
+                    if (bs[l].dtype == DATA_TYPE_BODY)
                     {
                         return true;
                     }
@@ -337,7 +306,7 @@ void CheckSelection(char *type, char *name, char *lval, Rval rval)
 
     if (DEBUG)
     {
-        ShowRval(stdout, rval);
+        RvalShow(stdout, rval);
     }
 
     CfDebug(")\n");
@@ -358,12 +327,12 @@ void CheckSelection(char *type, char *name, char *lval, Rval rval)
                 {
                     CfDebug("Matched syntatically correct body (lval) item = (%s)\n", lval);
 
-                    if (bs[l].dtype == cf_body)
+                    if (bs[l].dtype == DATA_TYPE_BODY)
                     {
                         CfDebug("Constraint syntax ok, but definition of body is elsewhere\n");
                         return;
                     }
-                    else if (bs[l].dtype == cf_bundle)
+                    else if (bs[l].dtype == DATA_TYPE_BUNDLE)
                     {
                         CfDebug("Constraint syntax ok, but definition of bundle is elsewhere\n");
                         return;
@@ -401,7 +370,7 @@ void CheckSelection(char *type, char *name, char *lval, Rval rval)
 
             for (l = 0; bs[l].range != NULL; l++)
             {
-                if (bs[l].dtype == cf_body)
+                if (bs[l].dtype == DATA_TYPE_BODY)
                 {
                     bs2 = (const BodySyntax *) (bs[l].range);
 
@@ -410,7 +379,7 @@ void CheckSelection(char *type, char *name, char *lval, Rval rval)
                         continue;
                     }
 
-                    for (k = 0; bs2[k].dtype != cf_notype; k++)
+                    for (k = 0; bs2[k].dtype != DATA_TYPE_NONE; k++)
                     {
                         /* Either module defined or common */
 
@@ -445,7 +414,7 @@ void CheckSelection(char *type, char *name, char *lval, Rval rval)
 /* Level 1                                                                  */
 /****************************************************************************/
 
-void CheckConstraintTypeMatch(const char *lval, Rval rval, enum cfdatatype dt, const char *range, int level)
+void CheckConstraintTypeMatch(const char *lval, Rval rval, DataType dt, const char *range, int level)
 {
     Rlist *rp;
     Item *checklist;
@@ -458,29 +427,29 @@ void CheckConstraintTypeMatch(const char *lval, Rval rval, enum cfdatatype dt, c
 
     CfDebug(" ------------------------------------------------\n");
 
-    if (dt == cf_bundle || dt == cf_body)
+    if (dt == DATA_TYPE_BUNDLE || dt == DATA_TYPE_BODY)
     {
         CfDebug(" - Checking inline constraint/arg %s[%s] => mappedval (bundle/body)\n", lval, CF_DATATYPES[dt]);
     }
     else
     {
-        CfDebug(" - Checking inline constraint/arg %s[%s] => mappedval (%c) %s\n", lval, CF_DATATYPES[dt], rval.rtype,
+        CfDebug(" - Checking inline constraint/arg %s[%s] => mappedval (%c) %s\n", lval, CF_DATATYPES[dt], rval.type,
                 range);
     }
     CfDebug(" ------------------------------------------------\n");
 
 /* Get type of lval */
 
-    switch (rval.rtype)
+    switch (rval.type)
     {
-    case CF_SCALAR:
+    case RVAL_TYPE_SCALAR:
         switch (dt)
         {
-        case cf_slist:
-        case cf_ilist:
-        case cf_rlist:
-        case cf_clist:
-        case cf_olist:
+        case DATA_TYPE_STRING_LIST:
+        case DATA_TYPE_INT_LIST:
+        case DATA_TYPE_REAL_LIST:
+        case DATA_TYPE_CONTEXT_LIST:
+        case DATA_TYPE_OPTION_LIST:
             if (level == 0)
             {
                 snprintf(output, CF_BUFSIZE, " !! Type mismatch -- rhs is a scalar, but lhs (%s) is not a scalar type",
@@ -494,15 +463,15 @@ void CheckConstraintTypeMatch(const char *lval, Rval rval, enum cfdatatype dt, c
         }
         break;
 
-    case CF_LIST:
+    case RVAL_TYPE_LIST:
 
         switch (dt)
         {
-        case cf_slist:
-        case cf_ilist:
-        case cf_rlist:
-        case cf_clist:
-        case cf_olist:
+        case DATA_TYPE_STRING_LIST:
+        case DATA_TYPE_INT_LIST:
+        case DATA_TYPE_REAL_LIST:
+        case DATA_TYPE_CONTEXT_LIST:
+        case DATA_TYPE_OPTION_LIST:
             break;
         default:
             snprintf(output, CF_BUFSIZE, "!! Type mismatch -- rhs is a list, but lhs (%s) is not a list type",
@@ -518,7 +487,7 @@ void CheckConstraintTypeMatch(const char *lval, Rval rval, enum cfdatatype dt, c
 
         return;
 
-    case CF_FNCALL:
+    case RVAL_TYPE_FNCALL:
 
         /* Fn-like objects are assumed to be parameterized bundles in these... */
 
@@ -531,47 +500,50 @@ void CheckConstraintTypeMatch(const char *lval, Rval rval, enum cfdatatype dt, c
 
         DeleteItemList(checklist);
         return;
+
+    default:
+        break;
     }
 
 /* If we get here, we have a literal scalar type */
 
     switch (dt)
     {
-    case cf_str:
-    case cf_slist:
+    case DATA_TYPE_STRING:
+    case DATA_TYPE_STRING_LIST:
         CheckParseString(lval, (const char *) rval.item, range);
         break;
 
-    case cf_int:
-    case cf_ilist:
+    case DATA_TYPE_INT:
+    case DATA_TYPE_INT_LIST:
         CheckParseInt(lval, (const char *) rval.item, range);
         break;
 
-    case cf_real:
-    case cf_rlist:
+    case DATA_TYPE_REAL:
+    case DATA_TYPE_REAL_LIST:
         CheckParseReal(lval, (const char *) rval.item, range);
         break;
 
-    case cf_body:
-    case cf_bundle:
+    case DATA_TYPE_BODY:
+    case DATA_TYPE_BUNDLE:
         CfDebug("Nothing to check for body reference\n");
         break;
 
-    case cf_opts:
-    case cf_olist:
+    case DATA_TYPE_OPTION:
+    case DATA_TYPE_OPTION_LIST:
         CheckParseOpts(lval, (const char *) rval.item, range);
         break;
 
-    case cf_class:
-    case cf_clist:
+    case DATA_TYPE_CONTEXT:
+    case DATA_TYPE_CONTEXT_LIST:
         CheckParseClass(lval, (const char *) rval.item, range);
         break;
 
-    case cf_irange:
+    case DATA_TYPE_INT_RANGE:
         CheckParseIntRange(lval, (const char *) rval.item, range);
         break;
 
-    case cf_rrange:
+    case DATA_TYPE_REAL_RANGE:
         CheckParseRealRange(lval, (char *) rval.item, range);
         break;
 
@@ -585,9 +557,9 @@ void CheckConstraintTypeMatch(const char *lval, Rval rval, enum cfdatatype dt, c
 
 /****************************************************************************/
 
-enum cfdatatype StringDataType(const char *scopeid, const char *string)
+DataType StringDataType(const char *scopeid, const char *string)
 {
-    enum cfdatatype dtype;
+    DataType dtype;
     Rval rval;
     int islist = false;
     char var[CF_BUFSIZE];
@@ -612,9 +584,9 @@ vars:
     {
         if (ExtractInnerCf3VarString(string, var))
         {
-            if ((dtype = GetVariable(scopeid, var, &rval)) != cf_notype)
+            if ((dtype = GetVariable(scopeid, var, &rval)) != DATA_TYPE_NONE)
             {
-                if (rval.rtype == CF_LIST)
+                if (rval.type == RVAL_TYPE_LIST)
                 {
                     if (!islist)
                     {
@@ -635,12 +607,12 @@ vars:
             else
             {
                 /* Must force non-pure substitution to be generic type CF_SCALAR.cf_str */
-                return cf_str;
+                return DATA_TYPE_STRING;
             }
         }
     }
 
-    return cf_str;
+    return DATA_TYPE_STRING;
 }
 
 /****************************************************************************/
@@ -1071,10 +1043,10 @@ static void CheckParseOpts(const char *lval, const char *s, const char *range)
 
 /****************************************************************************/
 
-int CheckParseVariableName(char *name)
+int CheckParseVariableName(const char *name)
 {
     const char *reserved[] = { "promiser", "handle", "promise_filename", "promise_linenumber", "this", NULL };
-    char *sp, scopeid[CF_MAXVARSIZE], vlval[CF_MAXVARSIZE];
+    char scopeid[CF_MAXVARSIZE], vlval[CF_MAXVARSIZE];
     int count = 0, level = 0;
 
     if (IsStrIn(name, reserved))
@@ -1086,7 +1058,7 @@ int CheckParseVariableName(char *name)
 
     if (strchr(name, '.'))
     {
-        for (sp = name; *sp != '\0'; sp++)
+        for (const char *sp = name; *sp != '\0'; sp++)
         {
             switch (*sp)
             {
@@ -1141,9 +1113,9 @@ bool IsDataType(const char *s)
 
 /****************************************************************************/
 
-static void CheckFnCallType(const char *lval, const char *s, enum cfdatatype dtype, const char *range)
+static void CheckFnCallType(const char *lval, const char *s, DataType dtype, const char *range)
 {
-    enum cfdatatype dt;
+    DataType dt;
     char output[CF_BUFSIZE];
     const FnCallType *fn;
 
@@ -1154,7 +1126,7 @@ static void CheckFnCallType(const char *lval, const char *s, enum cfdatatype dty
         return;
     }
 
-    fn = FindFunction(s);
+    fn = FnCallTypeGet(s);
 
     if (fn)
     {
@@ -1164,27 +1136,27 @@ static void CheckFnCallType(const char *lval, const char *s, enum cfdatatype dty
         {
             /* Ok to allow fn calls of correct element-type in lists */
 
-            if (dt == cf_str && dtype == cf_slist)
+            if (dt == DATA_TYPE_STRING && dtype == DATA_TYPE_STRING_LIST)
             {
                 return;
             }
 
-            if (dt == cf_int && dtype == cf_ilist)
+            if (dt == DATA_TYPE_INT && dtype == DATA_TYPE_INT_LIST)
             {
                 return;
             }
 
-            if (dt == cf_real && dtype == cf_rlist)
+            if (dt == DATA_TYPE_REAL && dtype == DATA_TYPE_REAL_LIST)
             {
                 return;
             }
 
-            if (dt == cf_opts && dtype == cf_olist)
+            if (dt == DATA_TYPE_OPTION && dtype == DATA_TYPE_OPTION_LIST)
             {
                 return;
             }
 
-            if (dt == cf_class && dtype == cf_clist)
+            if (dt == DATA_TYPE_CONTEXT && dtype == DATA_TYPE_CONTEXT_LIST)
             {
                 return;
             }
@@ -1259,7 +1231,7 @@ static JsonElement *ExportAttributesSyntaxAsJson(const BodySyntax attributes[])
             /* TODO: must handle edit_line somehow */
             continue;
         }
-        else if (attributes[i].dtype == cf_body)
+        else if (attributes[i].dtype == DATA_TYPE_BODY)
         {
             JsonElement *json_attributes = ExportAttributesSyntaxAsJson((const BodySyntax *) attributes[i].range);
 
@@ -1275,7 +1247,7 @@ static JsonElement *ExportAttributesSyntaxAsJson(const BodySyntax attributes[])
             {
                 JsonObjectAppendString(attribute, "pcre-range", ".*");
             }
-            else if (attributes[i].dtype == cf_opts || attributes[i].dtype == cf_olist)
+            else if (attributes[i].dtype == DATA_TYPE_OPTION || attributes[i].dtype == DATA_TYPE_OPTION_LIST)
             {
                 JsonElement *options = JsonArrayCreate(10);
                 char options_buffer[CF_BUFSIZE];
@@ -1378,317 +1350,6 @@ void SyntaxPrintAsJson(Writer *writer)
 
 /****************************************************************************/
 
-static JsonElement *ExportAttributeValueAsJson(Rval rval)
-{
-    JsonElement *json_attribute = JsonObjectCreate(10);
-
-    switch (rval.rtype)
-    {
-    case CF_SCALAR:
-    {
-        char buffer[CF_BUFSIZE];
-
-        EscapeQuotes((const char *) rval.item, buffer, sizeof(buffer));
-
-        JsonObjectAppendString(json_attribute, "type", "string");
-        JsonObjectAppendString(json_attribute, "value", buffer);
-    }
-        return json_attribute;
-
-    case CF_LIST:
-    {
-        Rlist *rp = NULL;
-        JsonElement *list = JsonArrayCreate(10);
-
-        JsonObjectAppendString(json_attribute, "type", "list");
-
-        for (rp = (Rlist *) rval.item; rp != NULL; rp = rp->next)
-        {
-            JsonArrayAppendObject(list, ExportAttributeValueAsJson((Rval) {rp->item, rp->type}));
-        }
-
-        JsonObjectAppendArray(json_attribute, "value", list);
-        return json_attribute;
-    }
-
-    case CF_FNCALL:
-    {
-        Rlist *argp = NULL;
-        FnCall *call = (FnCall *) rval.item;
-
-        JsonObjectAppendString(json_attribute, "type", "function-call");
-        JsonObjectAppendString(json_attribute, "name", call->name);
-
-        {
-            JsonElement *arguments = JsonArrayCreate(10);
-
-            for (argp = call->args; argp != NULL; argp = argp->next)
-            {
-                JsonArrayAppendObject(arguments, ExportAttributeValueAsJson((Rval) {argp->item, argp->type}));
-            }
-
-            JsonObjectAppendArray(json_attribute, "arguments", arguments);
-        }
-
-        return json_attribute;
-    }
-
-    default:
-        FatalError("Attempted to export attribute of type: %c", rval.rtype);
-        return NULL;
-    }
-}
-
-/****************************************************************************/
-
-static JsonElement *CreateContextAsJson(const char *name, size_t offset,
-                                        size_t offset_end, const char *children_name, JsonElement *children)
-{
-    JsonElement *json = JsonObjectCreate(10);
-
-    JsonObjectAppendString(json, "name", name);
-    JsonObjectAppendInteger(json, "offset", offset);
-    JsonObjectAppendInteger(json, "offset-end", offset_end);
-    JsonObjectAppendArray(json, children_name, children);
-
-    return json;
-}
-
-/****************************************************************************/
-
-static JsonElement *ExportBodyClassesAsJson(Seq *constraints)
-{
-    JsonElement *json_contexts = JsonArrayCreate(10);
-    JsonElement *json_attributes = JsonArrayCreate(10);
-    char *current_context = "any";
-    size_t context_offset_start = -1;
-    size_t context_offset_end = -1;
-
-    for (size_t i = 0; i < SeqLength(constraints); i++)
-    {
-        Constraint *cp = SeqAt(constraints, i);
-
-        JsonElement *json_attribute = JsonObjectCreate(10);
-
-        JsonObjectAppendInteger(json_attribute, "offset", cp->offset.start);
-        JsonObjectAppendInteger(json_attribute, "offset-end", cp->offset.end);
-
-        context_offset_start = cp->offset.context;
-        context_offset_end = cp->offset.end;
-
-        JsonObjectAppendString(json_attribute, "lval", cp->lval);
-        JsonObjectAppendObject(json_attribute, "rval", ExportAttributeValueAsJson(cp->rval));
-        JsonArrayAppendObject(json_attributes, json_attribute);
-
-
-
-        if (i == (SeqLength(constraints) - 1) || strcmp(current_context, ((Constraint *)SeqAt(constraints, i + 1))->classes) != 0)
-        {
-            JsonArrayAppendObject(json_contexts,
-                                  CreateContextAsJson(current_context,
-                                                      context_offset_start,
-                                                      context_offset_end, "attributes", json_attributes));
-
-            current_context = cp->classes;
-        }
-    }
-
-    return json_contexts;
-}
-
-/****************************************************************************/
-
-static JsonElement *ExportBundleClassesAsJson(Promise *promises)
-{
-    JsonElement *json_contexts = JsonArrayCreate(10);
-    JsonElement *json_promises = JsonArrayCreate(10);
-    char *current_context = "any";
-    size_t context_offset_start = -1;
-    size_t context_offset_end = -1;
-    Promise *pp = NULL;
-
-    for (pp = promises; pp != NULL; pp = pp->next)
-    {
-        JsonElement *json_promise = JsonObjectCreate(10);
-
-        JsonObjectAppendInteger(json_promise, "offset", pp->offset.start);
-
-        {
-            JsonElement *json_promise_attributes = JsonArrayCreate(10);
-
-            for (size_t k = 0; k < SeqLength(pp->conlist); k++)
-            {
-                Constraint *cp = SeqAt(pp->conlist, k);
-
-                JsonElement *json_attribute = JsonObjectCreate(10);
-
-                JsonObjectAppendInteger(json_attribute, "offset", cp->offset.start);
-                JsonObjectAppendInteger(json_attribute, "offset-end", cp->offset.end);
-
-                context_offset_end = cp->offset.end;
-
-                JsonObjectAppendString(json_attribute, "lval", cp->lval);
-                JsonObjectAppendObject(json_attribute, "rval", ExportAttributeValueAsJson(cp->rval));
-                JsonArrayAppendObject(json_promise_attributes, json_attribute);
-            }
-
-            JsonObjectAppendInteger(json_promise, "offset-end", context_offset_end);
-
-            JsonObjectAppendString(json_promise, "promiser", pp->promiser);
-
-            switch (pp->promisee.rtype)
-            {
-            case CF_SCALAR:
-                JsonObjectAppendString(json_promise, "promisee", pp->promisee.item);
-                break;
-
-            case CF_LIST:
-                {
-                    JsonElement *promisee_list = JsonArrayCreate(10);
-                    for (const Rlist *rp = pp->promisee.item; rp; rp = rp->next)
-                    {
-                        JsonArrayAppendString(promisee_list, ScalarValue(rp));
-                    }
-                    JsonObjectAppendArray(json_promise, "promisee", promisee_list);
-                }
-                break;
-
-            default:
-                break;
-            }
-
-            JsonObjectAppendArray(json_promise, "attributes", json_promise_attributes);
-        }
-        JsonArrayAppendObject(json_promises, json_promise);
-
-        if (pp->next == NULL || strcmp(current_context, pp->next->classes) != 0)
-        {
-            JsonArrayAppendObject(json_contexts,
-                                  CreateContextAsJson(current_context,
-                                                      context_offset_start,
-                                                      context_offset_end, "promises", json_promises));
-
-            current_context = pp->classes;
-        }
-    }
-
-    return json_contexts;
-}
-
-/****************************************************************************/
-
-static JsonElement *ExportBundleAsJson(Bundle *bundle)
-{
-    JsonElement *json_bundle = JsonObjectCreate(10);
-
-    JsonObjectAppendInteger(json_bundle, "offset", bundle->offset.start);
-    JsonObjectAppendInteger(json_bundle, "offset-end", bundle->offset.end);
-
-    JsonObjectAppendString(json_bundle, "name", bundle->name);
-    JsonObjectAppendString(json_bundle, "bundle-type", bundle->type);
-
-    {
-        JsonElement *json_args = JsonArrayCreate(10);
-        Rlist *argp = NULL;
-
-        for (argp = bundle->args; argp != NULL; argp = argp->next)
-        {
-            JsonArrayAppendString(json_args, argp->item);
-        }
-
-        JsonObjectAppendArray(json_bundle, "arguments", json_args);
-    }
-
-    {
-        JsonElement *json_promise_types = JsonArrayCreate(10);
-        SubType *sp = NULL;
-
-        for (sp = bundle->subtypes; sp != NULL; sp = sp->next)
-        {
-            JsonElement *json_promise_type = JsonObjectCreate(10);
-
-            JsonObjectAppendInteger(json_promise_type, "offset", sp->offset.start);
-            JsonObjectAppendInteger(json_promise_type, "offset-end", sp->offset.end);
-            JsonObjectAppendString(json_promise_type, "name", sp->name);
-            JsonObjectAppendArray(json_promise_type, "classes", ExportBundleClassesAsJson(sp->promiselist));
-
-            JsonArrayAppendObject(json_promise_types, json_promise_type);
-        }
-
-        JsonObjectAppendArray(json_bundle, "promise-types", json_promise_types);
-    }
-
-    return json_bundle;
-}
-
-/****************************************************************************/
-
-static JsonElement *ExportBodyAsJson(Body *body)
-{
-    JsonElement *json_body = JsonObjectCreate(10);
-
-    JsonObjectAppendInteger(json_body, "offset", body->offset.start);
-    JsonObjectAppendInteger(json_body, "offset-end", body->offset.end);
-
-    JsonObjectAppendString(json_body, "name", body->name);
-    JsonObjectAppendString(json_body, "body-type", body->type);
-
-    {
-        JsonElement *json_args = JsonArrayCreate(10);
-        Rlist *argp = NULL;
-
-        for (argp = body->args; argp != NULL; argp = argp->next)
-        {
-            JsonArrayAppendString(json_args, argp->item);
-        }
-
-        JsonObjectAppendArray(json_body, "arguments", json_args);
-    }
-
-    JsonObjectAppendArray(json_body, "classes", ExportBodyClassesAsJson(body->conlist));
-
-    return json_body;
-}
-
-/****************************************************************************/
-
-void PolicyPrintAsJson(Writer *writer, const char *filename, Seq *bundles, Seq *bodies)
-{
-    JsonElement *json_policy = JsonObjectCreate(10);
-
-    JsonObjectAppendString(json_policy, "name", filename);
-
-    {
-        JsonElement *json_bundles = JsonArrayCreate(10);
-
-        for (size_t i = 0; i < SeqLength(bundles); i++)
-        {
-            Bundle *bp = SeqAt(bundles, i);
-            JsonArrayAppendObject(json_bundles, ExportBundleAsJson(bp));
-        }
-
-        JsonObjectAppendArray(json_policy, "bundles", json_bundles);
-    }
-
-    {
-        JsonElement *json_bodies = JsonArrayCreate(10);
-
-        for (size_t i = 0; i < SeqLength(bodies); i++)
-        {
-            Body *bdp = SeqAt(bodies, i);
-
-            JsonArrayAppendObject(json_bodies, ExportBodyAsJson(bdp));
-        }
-
-        JsonObjectAppendArray(json_policy, "bodies", json_bodies);
-    }
-
-    JsonElementPrint(writer, json_policy, 0);
-    JsonElementDestroy(json_policy);
-}
-
-/****************************************************************************/
-
 static void IndentPrint(Writer *writer, int indent_level)
 {
     int i = 0;
@@ -1704,7 +1365,7 @@ static void IndentPrint(Writer *writer, int indent_level)
 static void RvalPrettyPrint(Writer *writer, Rval rval)
 {
 /* FIX: prettify */
-    RvalPrint(writer, rval);
+    RvalWrite(writer, rval);
 }
 
 /****************************************************************************/
@@ -1774,20 +1435,19 @@ void BodyPrettyPrint(Writer *writer, Body *body)
 
 void BundlePrettyPrint(Writer *writer, Bundle *bundle)
 {
-    SubType *promise_type = NULL;
-
     WriterWriteF(writer, "bundle %s %s", bundle->type, bundle->name);
     ArgumentsPrettyPrint(writer, bundle->args);
     WriterWrite(writer, "\n{");
 
-    for (promise_type = bundle->subtypes; promise_type != NULL; promise_type = promise_type->next)
+    for (size_t i = 0; i < SeqLength(bundle->subtypes); i++)
     {
-        Promise *pp = NULL;
+        SubType *promise_type = SeqAt(bundle->subtypes, i);
 
         WriterWriteF(writer, "\n%s:\n", promise_type->name);
 
-        for (pp = promise_type->promiselist; pp != NULL; pp = pp->next)
+        for (size_t ppi = 0; ppi < SeqLength(promise_type->promises); ppi++)
         {
+            Promise *pp = SeqAt(promise_type->promises, ppi);
             Constraint *cp = NULL;
             char *current_class = NULL;
 
@@ -1823,7 +1483,7 @@ void BundlePrettyPrint(Writer *writer, Bundle *bundle)
             }
         }
 
-        if (promise_type->next != NULL)
+        if (i == (SeqLength(bundle->subtypes) - 1))
         {
             WriterWriteChar(writer, '\n');
         }

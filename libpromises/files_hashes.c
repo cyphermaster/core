@@ -31,6 +31,35 @@
 #include "cfstream.h"
 #include "client_code.h"
 #include "files_lib.h"
+#include "rlist.h"
+
+static const char *CF_DIGEST_TYPES[10][2] =
+{
+    {"md5", "m"},
+    {"sha224", "c"},
+    {"sha256", "C"},
+    {"sha384", "h"},
+    {"sha512", "H"},
+    {"sha1", "S"},
+    {"sha", "s"},               /* Should come last, since substring */
+    {"best", "b"},
+    {"crypt", "o"},
+    {NULL, NULL}
+};
+
+static const int CF_DIGEST_SIZES[10] =
+{
+    CF_MD5_LEN,
+    CF_SHA224_LEN,
+    CF_SHA256_LEN,
+    CF_SHA384_LEN,
+    CF_SHA512_LEN,
+    CF_SHA1_LEN,
+    CF_SHA_LEN,
+    CF_BEST_LEN,
+    CF_CRYPT_LEN,
+    0
+};
 
 static int ReadHash(CF_DB *dbp, enum cfhashes type, char *name, unsigned char digest[EVP_MAX_MD_SIZE + 1]);
 static int WriteHash(CF_DB *dbp, enum cfhashes type, char *name, unsigned char digest[EVP_MAX_MD_SIZE + 1]);
@@ -71,21 +100,11 @@ int FileHashChanged(char *filename, unsigned char digest[EVP_MAX_MD_SIZE + 1], i
             {
                 CfDebug("Found cryptohash for %s in database but it didn't match\n", filename);
 
-                if (EXCLAIM)
-                {
-                    CfOut(warnlevel, "", "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                }
-
                 CfOut(warnlevel, "", "ALERT: Hash (%s) for %s changed!", FileHashName(type), filename);
 
                 if (pp->ref)
                 {
                     CfOut(warnlevel, "", "Preceding promise: %s", pp->ref);
-                }
-
-                if (EXCLAIM)
-                {
-                    CfOut(warnlevel, "", "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
                 }
 
                 if (attr.change.update)
@@ -129,7 +148,7 @@ int FileHashChanged(char *filename, unsigned char digest[EVP_MAX_MD_SIZE + 1], i
 
 int CompareFileHashes(char *file1, char *file2, struct stat *sstat, struct stat *dstat, Attributes attr, Promise *pp)
 {
-    static unsigned char digest1[EVP_MAX_MD_SIZE + 1], digest2[EVP_MAX_MD_SIZE + 1];
+    unsigned char digest1[EVP_MAX_MD_SIZE + 1] = { 0 }, digest2[EVP_MAX_MD_SIZE + 1] = { 0 };
     int i;
 
     CfDebug("CompareFileHashes(%s,%s)\n", file1, file2);
@@ -588,4 +607,19 @@ const char *FileHashName(enum cfhashes id)
 static int FileHashSize(enum cfhashes id)
 {
     return CF_DIGEST_SIZES[id];
+}
+
+enum cfhashes String2HashType(char *typestr)
+{
+    int i;
+
+    for (i = 0; CF_DIGEST_TYPES[i][0] != NULL; i++)
+    {
+        if (typestr && (strcmp(typestr, CF_DIGEST_TYPES[i][0]) == 0))
+        {
+            return (enum cfhashes) i;
+        }
+    }
+
+    return cf_nohash;
 }

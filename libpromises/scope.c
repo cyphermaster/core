@@ -34,6 +34,7 @@
 #include "transaction.h"
 #include "logging.h"
 #include "misc_lib.h"
+#include "rlist.h"
 
 #include <assert.h>
 
@@ -118,7 +119,7 @@ void NewScope(const char *name)
 
 /*******************************************************************/
 
-void AugmentScope(char *scope, char *namespace, Rlist *lvals, Rlist *rvals)
+void AugmentScope(char *scope, char *ns, Rlist *lvals, Rlist *rvals)
 {
     Scope *ptr;
     Rlist *rpl, *rpr;
@@ -131,9 +132,9 @@ void AugmentScope(char *scope, char *namespace, Rlist *lvals, Rlist *rvals)
     {
         CfOut(cf_error, "", "While constructing scope \"%s\"\n", scope);
         fprintf(stderr, "Formal = ");
-        ShowRlist(stderr, lvals);
+        RlistShow(stderr, lvals);
         fprintf(stderr, ", Actual = ");
-        ShowRlist(stderr, rvals);
+        RlistShow(stderr, rvals);
         fprintf(stderr, "\n");
         FatalError("Augment scope, formal and actual parameter mismatch is fatal");
     }
@@ -149,28 +150,28 @@ void AugmentScope(char *scope, char *namespace, Rlist *lvals, Rlist *rvals)
 
         if (IsNakedVar(rpr->item, '@'))
         {
-            enum cfdatatype vtype;
+            DataType vtype;
             char qnaked[CF_MAXVARSIZE];
             
             GetNaked(naked, rpr->item);
 
             if (IsQualifiedVariable(naked) && strchr(naked, CF_NS) == NULL)
             {
-                snprintf(qnaked, CF_MAXVARSIZE, "%s%c%s", namespace, CF_NS, naked);
+                snprintf(qnaked, CF_MAXVARSIZE, "%s%c%s", ns, CF_NS, naked);
             }
             
             vtype = GetVariable(scope, qnaked, &retval); 
 
             switch (vtype)
             {
-            case cf_slist:
-            case cf_ilist:
-            case cf_rlist:
-                NewList(scope, lval, CopyRvalItem((Rval) {retval.item, CF_LIST}).item, cf_slist);
+            case DATA_TYPE_STRING_LIST:
+            case DATA_TYPE_INT_LIST:
+            case DATA_TYPE_REAL_LIST:
+                NewList(scope, lval, RvalCopy((Rval) {retval.item, RVAL_TYPE_LIST}).item, DATA_TYPE_STRING_LIST);
                 break;
             default:
                 CfOut(cf_error, "", " !! List parameter \"%s\" not found while constructing scope \"%s\" - use @(scope.variable) in calling reference", qnaked, scope);
-                NewScalar(scope, lval, rpr->item, cf_str);
+                NewScalar(scope, lval, rpr->item, DATA_TYPE_STRING);
                 break;
             }
         }
@@ -180,26 +181,26 @@ void AugmentScope(char *scope, char *namespace, Rlist *lvals, Rlist *rvals)
         Promise *pp = NULL; // This argument should really get passed down.
         
         switch(rpr->type)
-           {
-           case CF_SCALAR:
-               NewScalar(scope, lval, rpr->item, cf_str);
-               break;
-               
-           case CF_FNCALL:
-               subfp = (FnCall *) rpr->item;
-               Rval rval = EvaluateFunctionCall(subfp, pp).rval;
-               if (rval.rtype == CF_SCALAR)
-               {
-                   NewScalar(scope, lval, rval.item, cf_str);
-               }
-               else
-               {
-                   CfOut(cf_error, "", "Only functions returning scalars can be used as arguments");
-               }
-               break;
-           default:
-               ProgrammingError("An argument neither a scalar nor a list seemed to appear. Impossible");
-           }
+        {
+        case RVAL_TYPE_SCALAR:
+            NewScalar(scope, lval, rpr->item, DATA_TYPE_STRING);
+            break;
+
+        case RVAL_TYPE_FNCALL:
+            subfp = (FnCall *) rpr->item;
+            Rval rval = FnCallEvaluate(subfp, pp).rval;
+            if (rval.type == RVAL_TYPE_SCALAR)
+            {
+                NewScalar(scope, lval, rval.item, DATA_TYPE_STRING);
+            }
+            else
+            {
+                CfOut(cf_error, "", "Only functions returning scalars can be used as arguments");
+            }
+            break;
+        default:
+            ProgrammingError("An argument neither a scalar nor a list seemed to appear. Impossible");
+        }
 
         }
     }
@@ -214,7 +215,7 @@ void AugmentScope(char *scope, char *namespace, Rlist *lvals, Rlist *rvals)
     {
         retval = ExpandPrivateRval(scope, assoc->rval);
         // Retain the assoc, just replace rval
-        DeleteRvalItem(assoc->rval);
+        RvalDestroy(assoc->rval);
         assoc->rval = retval;
     }
 
@@ -367,7 +368,7 @@ void PushThisScope()
     }
 
     CF_STCKFRAME++;
-    PushStack(&CF_STCK, (void *) op);
+    RlistPushStack(&CF_STCK, (void *) op);
     snprintf(name, CF_MAXVARSIZE, "this_%d", CF_STCKFRAME);
     free(op->scope);
     op->scope = xstrdup(name);
@@ -382,7 +383,7 @@ void PopThisScope()
     if (CF_STCKFRAME > 0)
     {
         DeleteScope("this");
-        PopStack(&CF_STCK, (void *) &op, sizeof(op));
+        RlistPopStack(&CF_STCK, (void *) &op, sizeof(op));
         if (op == NULL)
         {
             return;

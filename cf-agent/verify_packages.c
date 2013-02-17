@@ -44,6 +44,11 @@
 #include "exec_tools.h"
 #include "policy.h"
 #include "misc_lib.h"
+#include "rlist.h"
+
+#ifdef HAVE_NOVA
+#include "agent_reports.h"
+#endif
 
 /** Entry points from VerifyPackagesPromise **/
 
@@ -68,6 +73,13 @@ static PackageManager *NewPackageManager(PackageManager **lists, char *mgr, enum
 static void DeletePackageManagers(PackageManager *newlist);
 
 static char *PrefixLocalRepository(Rlist *repositories, char *package);
+
+#ifndef HAVE_NOVA
+void ReportPatches(PackageManager *list)
+{
+    CfOut(cf_verbose, "", "# Patch reporting feature is only available in version Nova and above\n");
+}
+#endif
 
 /*****************************************************************************/
 
@@ -198,7 +210,7 @@ static int PackageSanityCheck(Attributes a, Promise *pp)
         {
             if (strlen(rp->item) > CF_MAXVARSIZE - 1)
             {
-                cfPS(cf_error, CF_FAIL, "", pp, a, " !! The repository path \"%s\" is too long", ScalarValue(rp));
+                cfPS(cf_error, CF_FAIL, "", pp, a, " !! The repository path \"%s\" is too long", RlistScalarValue(rp));
                 return false;
             }
         }
@@ -515,7 +527,10 @@ static PackageItem *GetCachedPackageList(PackageManager *manager, const char *de
         line[0] = '\0';
         if (fgets(line, CF_BUFSIZE, fin) == NULL)
         {
-            UnexpectedError("Failed to read line %d from stream '%s'", linenumber+1, name);
+            if (strlen(line))
+            {
+                UnexpectedError("Failed to read line %d from stream '%s'", linenumber+1, name);
+            }
         }
         ++linenumber;
         int scancount = sscanf(line, "%250[^,],%250[^,],%250[^,],%250[^\n]", name, version, arch, mgr);
@@ -711,9 +726,9 @@ int FindLargestVersionAvail(char *matchName, char *matchVers, const char *refAny
     for (rp = repositories; rp != NULL; rp = rp->next)
     {
 
-        if ((dirh = OpenDirLocal(ScalarValue(rp))) == NULL)
+        if ((dirh = OpenDirLocal(RlistScalarValue(rp))) == NULL)
         {
-            CfOut(cf_error, "opendir", "!! Can't open local directory \"%s\"\n", ScalarValue(rp));
+            CfOut(cf_error, "opendir", "!! Can't open local directory \"%s\"\n", RlistScalarValue(rp));
             continue;
         }
 
@@ -824,9 +839,9 @@ static void SchedulePackageOp(const char *name, const char *version, const char 
     if ((a.packages.package_name_convention) || (a.packages.package_delete_convention))
     {
         SetNewScope("cf_pack_context");
-        NewScalar("cf_pack_context", "name", name, cf_str);
-        NewScalar("cf_pack_context", "version", version, cf_str);
-        NewScalar("cf_pack_context", "arch", arch, cf_str);
+        NewScalar("cf_pack_context", "name", name, DATA_TYPE_STRING);
+        NewScalar("cf_pack_context", "version", version, DATA_TYPE_STRING);
+        NewScalar("cf_pack_context", "arch", arch, DATA_TYPE_STRING);
 
         if ((a.packages.package_delete_convention) && (a.packages.package_policy == cfa_deletepack))
         {
@@ -889,9 +904,9 @@ static void SchedulePackageOp(const char *name, const char *version, const char 
                 ((a.packages.package_select == cfa_gt) || (a.packages.package_select == cfa_ge)))
             {
                 SetNewScope("cf_pack_context_anyver");
-                NewScalar("cf_pack_context_anyver", "name", name, cf_str);
-                NewScalar("cf_pack_context_anyver", "version", "(.*)", cf_str);
-                NewScalar("cf_pack_context_anyver", "arch", arch, cf_str);
+                NewScalar("cf_pack_context_anyver", "name", name, DATA_TYPE_STRING);
+                NewScalar("cf_pack_context_anyver", "version", "(.*)", DATA_TYPE_STRING);
+                NewScalar("cf_pack_context_anyver", "arch", arch, DATA_TYPE_STRING);
                 ExpandScalar(a.packages.package_name_convention, refAnyVer);
                 DeleteScope("cf_pack_context_anyver");
 
@@ -1021,9 +1036,9 @@ static void SchedulePackageOp(const char *name, const char *version, const char 
             ((a.packages.package_select == cfa_gt) || (a.packages.package_select == cfa_ge)))
         {
             SetNewScope("cf_pack_context_anyver");
-            NewScalar("cf_pack_context_anyver", "name", name, cf_str);
-            NewScalar("cf_pack_context_anyver", "version", "(.*)", cf_str);
-            NewScalar("cf_pack_context_anyver", "arch", arch, cf_str);
+            NewScalar("cf_pack_context_anyver", "name", name, DATA_TYPE_STRING);
+            NewScalar("cf_pack_context_anyver", "version", "(.*)", DATA_TYPE_STRING);
+            NewScalar("cf_pack_context_anyver", "arch", arch, DATA_TYPE_STRING);
             ExpandScalar(a.packages.package_name_convention, refAnyVer);
             DeleteScope("cf_pack_context_anyver");
 
@@ -1085,9 +1100,9 @@ static void SchedulePackageOp(const char *name, const char *version, const char 
                     }
 
                     SetNewScope("cf_pack_context");
-                    NewScalar("cf_pack_context", "name", name, cf_str);
-                    NewScalar("cf_pack_context", "version", instVer, cf_str);
-                    NewScalar("cf_pack_context", "arch", instArch, cf_str);
+                    NewScalar("cf_pack_context", "name", name, DATA_TYPE_STRING);
+                    NewScalar("cf_pack_context", "version", instVer, DATA_TYPE_STRING);
+                    NewScalar("cf_pack_context", "arch", instArch, DATA_TYPE_STRING);
                     ExpandScalar(a.packages.package_delete_convention, reference2);
                     id_del = reference2;
                     DeleteScope("cf_pack_context");
@@ -1453,8 +1468,8 @@ static void VerifyPromisedPackage(Attributes a, Promise *pp)
         {
             for (Rlist *rp = a.packages.package_architectures; rp != NULL; rp = rp->next)
             {
-                CfOut(cf_verbose, "", " ... trying listed arch %s\n", ScalarValue(rp));
-                CheckPackageState(a, pp, package, a.packages.package_version, ScalarValue(rp), false);
+                CfOut(cf_verbose, "", " ... trying listed arch %s\n", RlistScalarValue(rp));
+                CheckPackageState(a, pp, package, a.packages.package_version, RlistScalarValue(rp), false);
             }
         }
     }
@@ -1494,7 +1509,7 @@ static void VerifyPromisedPackage(Attributes a, Promise *pp)
         {
             for (Rlist *rp = a.packages.package_architectures; rp != NULL; rp = rp->next)
             {
-                CfOut(cf_verbose, "", " ... trying listed arch %s\n", ScalarValue(rp));
+                CfOut(cf_verbose, "", " ... trying listed arch %s\n", RlistScalarValue(rp));
                 CheckPackageState(a, pp, package, "*", rp->item, true);
             }
         }
@@ -2041,7 +2056,7 @@ static void DeletePackageItems(PackageItem * pi)
         free(pi->name);
         free(pi->version);
         free(pi->arch);
-        DeletePromise(pi->pp);
+        PromiseDestroy(pi->pp);
         free(pi);
     }
 }

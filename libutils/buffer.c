@@ -22,11 +22,7 @@
   included file COSL.txt.
 */
 
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
-#include <stdio.h>
-#include <ctype.h>
+#include "alloc.h"
 #include "buffer.h"
 #include "refcount.h"
 
@@ -46,32 +42,70 @@ void BufferSetGeneralMemoryCap(unsigned int cap)
     general_memory_cap = cap;
 }
 
-int BufferNew(Buffer **buffer)
+Buffer *BufferNew(void)
 {
-    if (!buffer)
+    Buffer *buffer = (Buffer *)xmalloc(sizeof(Buffer));
+    buffer->capacity = DEFAULT_BUFFER_SIZE;
+    buffer->buffer = (char *)xmalloc(buffer->capacity);
+    buffer->mode = BUFFER_BEHAVIOR_CSTRING;
+    buffer->used = 0;
+    buffer->beginning = 0;
+    buffer->end = 0;
+    buffer->memory_cap = general_memory_cap;
+    RefCountNew(&(buffer->ref_count));
+    RefCountAttach(buffer->ref_count, buffer);
+    return buffer;
+}
+
+Buffer* BufferNewFrom(const char *data, unsigned int length)
+{
+    /*
+     * Are we going to go over the limit?
+     */
+    if (length > general_memory_cap)
     {
-        return -1;
+        return NULL;
     }
-    *buffer = (Buffer *)malloc(sizeof(Buffer));
-    if (!(*buffer))
+    Buffer *buffer = (Buffer *)xmalloc(sizeof(Buffer));
+    buffer->capacity = DEFAULT_BUFFER_SIZE;
+    buffer->buffer = (char *)xmalloc(buffer->capacity);
+    /*
+     * Check if we have enough space, otherwise create a larger buffer
+     */
+    if (length >= buffer->capacity)
     {
-        return -1;
+        unsigned int required_blocks = (length / DEFAULT_BUFFER_SIZE) + 1;
+        buffer->buffer = (char *)xrealloc(buffer->buffer, required_blocks * DEFAULT_BUFFER_SIZE);
+        buffer->capacity = required_blocks * DEFAULT_BUFFER_SIZE;
+        buffer->used = 0;
     }
-    (*buffer)->capacity = DEFAULT_BUFFER_SIZE;
-    (*buffer)->buffer = (char *)malloc((*buffer)->capacity);
-    if (!(*buffer)->buffer)
+    buffer->mode = BUFFER_BEHAVIOR_CSTRING;
+    buffer->used = 0;
+    buffer->beginning = 0;
+    buffer->end = 0;
+    buffer->memory_cap = general_memory_cap;
+    RefCountNew(&(buffer->ref_count));
+    RefCountAttach(buffer->ref_count, buffer);
+    /*
+     * We have a buffer that is large enough, copy the data.
+     */
+    unsigned int c = 0;
+    unsigned int total = 0;
+    for (c = 0; c < length; ++c)
     {
-        free (*buffer);
-        return -1;
+        buffer->buffer[c] = data[c];
+        if ((data[c] == '\0') && (buffer->mode = BUFFER_BEHAVIOR_CSTRING))
+        {
+            break;
+        }
+        ++total;
     }
-    (*buffer)->mode = BUFFER_BEHAVIOR_CSTRING;
-    (*buffer)->used = 0;
-    (*buffer)->beginning = 0;
-    (*buffer)->end = 0;
-    (*buffer)->memory_cap = general_memory_cap;
-    RefCountNew(&(*buffer)->ref_count);
-    RefCountAttach((*buffer)->ref_count, (*buffer));
-    return 0;
+    buffer->used = total;
+    if (buffer->mode == BUFFER_BEHAVIOR_CSTRING)
+    {
+        buffer->buffer[buffer->used] = '\0';
+    }
+    return buffer;
 }
 
 int BufferDestroy(Buffer **buffer)
@@ -117,11 +151,7 @@ int BufferCopy(Buffer *source, Buffer **destination)
     {
         return -1;
     }
-    *destination = (Buffer *)malloc(sizeof(Buffer));
-    if (!(*destination))
-    {
-        return -1;
-    }
+    *destination = (Buffer *)xmalloc(sizeof(Buffer));
     (*destination)->capacity = source->capacity;
     (*destination)->mode = source->mode;
     (*destination)->used = source->used;
@@ -190,15 +220,7 @@ int BufferSet(Buffer *buffer, char *bytes, unsigned int length)
     if (RefCountIsShared(buffer->ref_count))
     {
         char *new_buffer = NULL;
-        new_buffer = (char *)malloc(buffer->capacity);
-        if (new_buffer == NULL)
-        {
-            /*
-             * Memory allocations do fail from time to time, even in Linux.
-             * Luckily we have not modified a thing, so just return -1.
-             */
-            return -1;
-        }
+        new_buffer = (char *)xmalloc(buffer->capacity);
         /*
          * Make a local copy of the variables that are required to restore to normality.
          */
@@ -260,19 +282,9 @@ int BufferSet(Buffer *buffer, char *bytes, unsigned int length)
      */
     if (length >= buffer->capacity)
     {
-        char *p = NULL;
         unsigned int required_blocks = (length / DEFAULT_BUFFER_SIZE) + 1;
-        p = (char *)realloc(buffer->buffer, required_blocks * DEFAULT_BUFFER_SIZE);
-        if (p == NULL)
-        {
-            /*
-             * Allocation failed. We have the data, although in a detached state.
-             * Just return -1 and be done with it.
-             */
-            return -1;
-        }
+        buffer->buffer = (char *)xrealloc(buffer->buffer, required_blocks * DEFAULT_BUFFER_SIZE);
         buffer->capacity = required_blocks * DEFAULT_BUFFER_SIZE;
-        buffer->buffer = p;
         buffer->used = 0;
     }
     /*
@@ -310,15 +322,7 @@ int BufferAppend(Buffer *buffer, char *bytes, unsigned int length)
     if (RefCountIsShared(buffer->ref_count))
     {
         char *new_buffer = NULL;
-        new_buffer = (char *)malloc(buffer->capacity);
-        if (new_buffer == NULL)
-        {
-            /*
-             * Memory allocations do fail from time to time, even in Linux.
-             * Luckily we have not modified a thing, so just return -1.
-             */
-            return -1;
-        }
+        new_buffer = (char *)xmalloc(buffer->capacity);
         /*
          * Make a local copy of the variables that are required to restore to normality.
          */
@@ -379,19 +383,9 @@ int BufferAppend(Buffer *buffer, char *bytes, unsigned int length)
      */
     if (buffer->used + length >= buffer->capacity)
     {
-        char *p = NULL;
         unsigned int required_blocks = ((buffer->used + length)/ DEFAULT_BUFFER_SIZE) + 1;
-        p = (char *)realloc(buffer->buffer, required_blocks * DEFAULT_BUFFER_SIZE);
-        if (p == NULL)
-        {
-            /*
-             * Allocation failed. We have the data, although in a detached state.
-             * Just return -1 and be done with it.
-             */
-            return -1;
-        }
+        buffer->buffer = (char *)xrealloc(buffer->buffer, required_blocks * DEFAULT_BUFFER_SIZE);
         buffer->capacity = required_blocks * DEFAULT_BUFFER_SIZE;
-        buffer->buffer = p;
     }
     /*
      * We have a buffer that is large enough, copy the data.
@@ -417,10 +411,17 @@ int BufferAppend(Buffer *buffer, char *bytes, unsigned int length)
 
 int BufferPrintf(Buffer *buffer, const char *format, ...)
 {
+    /*
+     * We declare two lists, in case we need to reiterate over the list because the buffer was
+     * too small.
+     */
     va_list ap;
+    va_list aq;
     va_start(ap, format);
+    va_copy(aq, ap);
     if (!buffer || !format)
     {
+        va_end(aq);
         va_end(ap);
         return -1;
     }
@@ -436,16 +437,7 @@ int BufferPrintf(Buffer *buffer, const char *format, ...)
     if (RefCountIsShared(buffer->ref_count))
     {
         char *new_buffer = NULL;
-        new_buffer = (char *)malloc(buffer->capacity);
-        if (new_buffer == NULL)
-        {
-            /*
-             * Memory allocations do fail from time to time, even in Linux.
-             * Luckily we have not modified a thing, so just return -1.
-             */
-            va_end(ap);
-            return -1;
-        }
+        new_buffer = (char *)xmalloc(buffer->capacity);
         /*
          * Make a local copy of the variables that are required to restore to normality.
          */
@@ -466,6 +458,7 @@ int BufferPrintf(Buffer *buffer, const char *format, ...)
             free (new_buffer);
             RefCountDestroy(&buffer->ref_count);
             buffer->ref_count = ref_count;
+            va_end(aq);
             va_end(ap);
             return -1;
         }
@@ -483,6 +476,7 @@ int BufferPrintf(Buffer *buffer, const char *format, ...)
             free (new_buffer);
             RefCountDestroy(&buffer->ref_count);
             buffer->ref_count = ref_count;
+            va_end(aq);
             va_end(ap);
             return -1;
         }
@@ -503,44 +497,42 @@ int BufferPrintf(Buffer *buffer, const char *format, ...)
         buffer->buffer = new_buffer;
         buffer->used = used;
     }
-    printed = vsnprintf(buffer->buffer, buffer->capacity, format, ap);
+    printed = vsnprintf(buffer->buffer, buffer->capacity, format, aq);
     if (printed >= buffer->capacity)
     {
         /*
          * Allocate a larger buffer and retry.
-         * Don't forget to signal by returning 0.
+         * Now is when having a copy of the list pays off :-)
          */
         if (printed > buffer->memory_cap)
         {
             /*
              * We would go over the memory_cap limit.
              */
+            va_end(aq);
             va_end(ap);
             return -1;
         }
         unsigned int required_blocks = (printed / DEFAULT_BUFFER_SIZE) + 1;
-        void *p = NULL;
-        p = realloc(buffer->buffer, required_blocks * DEFAULT_BUFFER_SIZE);
-        if (p == NULL)
-        {
-            va_end(ap);
-            return -1;
-        }
-        buffer->buffer = (char *)p;
+        buffer->buffer = (char *)xrealloc(buffer->buffer, required_blocks * DEFAULT_BUFFER_SIZE);
         buffer->capacity = required_blocks * DEFAULT_BUFFER_SIZE;
         buffer->used = 0;
-        printed = 0;
+        printed = vsnprintf(buffer->buffer, buffer->capacity, format, ap);
+        buffer->used = printed;
     }
     else
     {
         buffer->used = printed;
     }
+    va_end(aq);
     va_end(ap);
     return printed;
 }
 
 int BufferVPrintf(Buffer *buffer, const char *format, va_list ap)
 {
+    va_list aq;
+    va_copy(aq, ap);
     if (!buffer || !format)
     {
         return -1;
@@ -557,15 +549,7 @@ int BufferVPrintf(Buffer *buffer, const char *format, va_list ap)
     if (RefCountIsShared(buffer->ref_count))
     {
         char *new_buffer = NULL;
-        new_buffer = (char *)malloc(buffer->capacity);
-        if (new_buffer == NULL)
-        {
-            /*
-             * Memory allocations do fail from time to time, even in Linux.
-             * Luckily we have not modified a thing, so just return -1.
-             */
-            return -1;
-        }
+        new_buffer = (char *)xmalloc(buffer->capacity);
         /*
          * Make a local copy of the variables that are required to restore to normality.
          */
@@ -621,12 +605,12 @@ int BufferVPrintf(Buffer *buffer, const char *format, va_list ap)
         buffer->buffer = new_buffer;
         buffer->used = used;
     }
-    printed = vsnprintf(buffer->buffer, buffer->capacity, format, ap);
+    printed = vsnprintf(buffer->buffer, buffer->capacity, format, aq);
     if (printed >= buffer->capacity)
     {
         /*
          * Allocate a larger buffer and retry.
-         * Don't forget to signal by returning 0.
+         * We use the copy of the list.
          */
         if (printed > buffer->memory_cap)
         {
@@ -636,16 +620,11 @@ int BufferVPrintf(Buffer *buffer, const char *format, va_list ap)
             return -1;
         }
         unsigned int required_blocks = (printed / DEFAULT_BUFFER_SIZE) + 1;
-        void *p = NULL;
-        p = realloc(buffer->buffer, required_blocks * DEFAULT_BUFFER_SIZE);
-        if (p == NULL)
-        {
-            return -1;
-        }
-        buffer->buffer = (char *)p;
+        buffer->buffer = (char *)xrealloc(buffer->buffer, required_blocks * DEFAULT_BUFFER_SIZE);
         buffer->capacity = required_blocks * DEFAULT_BUFFER_SIZE;
         buffer->used = 0;
-        printed = 0;
+        printed = vsnprintf(buffer->buffer, buffer->capacity, format, ap);
+        buffer->used = printed;
     }
     else
     {
@@ -667,7 +646,7 @@ void BufferZero(Buffer *buffer)
     if (RefCountIsShared(buffer->ref_count))
     {
         RefCountDetach(buffer->ref_count, buffer);
-        buffer->buffer = (char *)malloc(buffer->capacity);
+        buffer->buffer = (char *)xmalloc(buffer->capacity);
         RefCountNew(&buffer->ref_count);
         RefCountAttach(buffer->ref_count, buffer);
     }

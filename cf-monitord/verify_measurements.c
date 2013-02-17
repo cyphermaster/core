@@ -23,13 +23,20 @@
 
 */
 
-#include "cf3.defs.h"
+#include "verify_measurements.h"
 
 #include "promises.h"
 #include "files_names.h"
 #include "attributes.h"
 #include "cfstream.h"
 #include "logging.h"
+#ifdef HAVE_NOVA
+#include "history.h"
+#endif
+
+#ifndef HAVE_NOVA
+static void VerifyMeasurement(double *this, Attributes a, Promise *pp);
+#endif
 
 static int CheckMeasureSanity(Attributes a, Promise *pp);
 
@@ -79,7 +86,7 @@ static int CheckMeasureSanity(Attributes a, Promise *pp)
         retval = false;
     }
 
-    if (a.measure.data_type == cf_notype)
+    if (a.measure.data_type == DATA_TYPE_NONE)
     {
         cfPS(cf_error, CF_INTERPT, "", pp, a, "The promiser \"%s\" did not specify a data type\n", pp->promiser);
         PromiseRef(cf_error, pp);
@@ -91,10 +98,10 @@ static int CheckMeasureSanity(Attributes a, Promise *pp)
         {
             switch (a.measure.data_type)
             {
-            case cf_counter:
-            case cf_str:
-            case cf_int:
-            case cf_real:
+            case DATA_TYPE_COUNTER:
+            case DATA_TYPE_STRING:
+            case DATA_TYPE_INT:
+            case DATA_TYPE_REAL:
                 break;
 
             default:
@@ -131,3 +138,9 @@ static int CheckMeasureSanity(Attributes a, Promise *pp)
 
     return retval;
 }
+
+#ifndef HAVE_NOVA
+static void VerifyMeasurement(double *this, Attributes a, Promise *pp)
+{
+}
+#endif

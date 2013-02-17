@@ -48,6 +48,7 @@
 #include "logging.h"
 #include "generic_agent.h" // HashVariables
 #include "misc_lib.h"
+#include "fncall.h"
 
 
 static void LoadSetuid(Attributes a, Promise *pp);
@@ -65,7 +66,7 @@ void LocateFilePromiserGroup(char *wildpath, Promise *pp, void (*fnptr) (char *p
     int count = 0, lastnode = false, expandregex = false;
     uid_t agentuid = getuid();
     int create = GetBooleanConstraint("create", pp);
-    char *pathtype = GetConstraintValue("pathtype", pp, CF_SCALAR);
+    char *pathtype = GetConstraintValue("pathtype", pp, RVAL_TYPE_SCALAR);
 
     CfDebug("LocateFilePromiserGroup(%s)\n", wildpath);
 
@@ -212,7 +213,7 @@ void LocateFilePromiserGroup(char *wildpath, Promise *pp, void (*fnptr) (char *p
 
                     pcopy = ExpandDeRefPromise(CONTEXTID, pp);
                     (*fnptr) (nextbufferOrig, pcopy, report_context);
-                    DeletePromise(pcopy);
+                    PromiseDestroy(pcopy);
                 }
             }
 
@@ -253,7 +254,7 @@ void VerifyFilePromise(char *path, Promise *pp, const ReportContext *report_cont
     }
 
     DeleteScalar("this", "promiser");
-    NewScalar("this", "promiser", path, cf_str); 
+    NewScalar("this", "promiser", path, DATA_TYPE_STRING); 
     
     thislock = AcquireLock(path, VUQNAME, CFSTARTTIME, a, pp, false);
 
@@ -410,7 +411,7 @@ void VerifyFilePromise(char *path, Promise *pp, const ReportContext *report_cont
         else
         {
             /* unless child nodes were repaired, set a promise kept class */
-            if (!IsDefinedClass("repaired" , pp->namespace))
+            if (!IsDefinedClass("repaired" , pp->ns))
             {
                 cfPS(cf_verbose, CF_NOP, "", pp, a, " -> Basedir \"%s\" not promising anything", path);
             }
@@ -499,13 +500,13 @@ int ScheduleEditOperation(char *filename, Attributes a, Promise *pp, const Repor
 
     if (a.haveeditline)
     {
-        if ((vp = GetConstraintValue("edit_line", pp, CF_FNCALL)))
+        if ((vp = GetConstraintValue("edit_line", pp, RVAL_TYPE_FNCALL)))
         {
             fp = (FnCall *) vp;
             strcpy(edit_bundle_name, fp->name);
             params = fp->args;
         }
-        else if ((vp = GetConstraintValue("edit_line", pp, CF_SCALAR)))
+        else if ((vp = GetConstraintValue("edit_line", pp, RVAL_TYPE_SCALAR)))
         {
             strcpy(edit_bundle_name, (char *) vp);
             params = NULL;
@@ -521,9 +522,9 @@ int ScheduleEditOperation(char *filename, Attributes a, Promise *pp, const Repor
         {
             method_deref = strchr(edit_bundle_name, CF_NS) + 1;
         }
-        else if ((strchr(edit_bundle_name, CF_NS) == NULL) && (strcmp(pp->namespace, "default") != 0))
+        else if ((strchr(edit_bundle_name, CF_NS) == NULL) && (strcmp(pp->ns, "default") != 0))
         {
-            snprintf(qualified_edit, CF_BUFSIZE, "%s%c%s", pp->namespace, CF_NS, edit_bundle_name);
+            snprintf(qualified_edit, CF_BUFSIZE, "%s%c%s", pp->ns, CF_NS, edit_bundle_name);
             method_deref = qualified_edit;
         }
         else            
@@ -534,7 +535,7 @@ int ScheduleEditOperation(char *filename, Attributes a, Promise *pp, const Repor
         CfOut(cf_verbose, "", " -> Handling file edits in edit_line bundle %s\n", method_deref);
 
         // add current filename to context - already there?
-        if ((bp = GetBundle(policy, method_deref, "edit_line")))
+        if ((bp = PolicyGetBundle(policy, NULL, "edit_line", method_deref)))
         {
             BannerSubBundle(bp, params);
 
@@ -542,7 +543,7 @@ int ScheduleEditOperation(char *filename, Attributes a, Promise *pp, const Repor
             NewScope(bp->name);
             HashVariables(policy, bp->name, report_context);
 
-            AugmentScope(bp->name, bp->namespace, bp->args, params);
+            AugmentScope(bp->name, bp->ns, bp->args, params);
             PushPrivateClassContext(a.edits.inherit);
             retval = ScheduleEditLineOperations(filename, bp, a, pp, report_context);
             PopPrivateClassContext();
@@ -557,13 +558,13 @@ int ScheduleEditOperation(char *filename, Attributes a, Promise *pp, const Repor
 
     if (a.haveeditxml)
     {
-        if ((vp = GetConstraintValue("edit_xml", pp, CF_FNCALL)))
+        if ((vp = GetConstraintValue("edit_xml", pp, RVAL_TYPE_FNCALL)))
         {
             fp = (FnCall *) vp;
             strcpy(edit_bundle_name, fp->name);
             params = fp->args;
         }
-        else if ((vp = GetConstraintValue("edit_xml", pp, CF_SCALAR)))
+        else if ((vp = GetConstraintValue("edit_xml", pp, RVAL_TYPE_SCALAR)))
         {
             strcpy(edit_bundle_name, (char *) vp);
             params = NULL;
@@ -586,7 +587,7 @@ int ScheduleEditOperation(char *filename, Attributes a, Promise *pp, const Repor
         
         CfOut(cf_verbose, "", " -> Handling file edits in edit_xml bundle %s\n", method_deref);
 
-        if ((bp = GetBundle(policy, method_deref, "edit_xml")))
+        if ((bp = PolicyGetBundle(policy, NULL, "edit_xml", method_deref)))
         {
             BannerSubBundle(bp, params);
 
@@ -594,7 +595,7 @@ int ScheduleEditOperation(char *filename, Attributes a, Promise *pp, const Repor
             NewScope(bp->name);
             HashVariables(policy, bp->name, report_context);
 
-            AugmentScope(bp->name, bp->namespace, bp->args, params);
+            AugmentScope(bp->name, bp->ns, bp->args, params);
             PushPrivateClassContext(a.edits.inherit);
             retval = ScheduleEditXmlOperations(filename, bp, a, pp, report_context);
             PopPrivateClassContext();
@@ -648,7 +649,7 @@ void *FindAndVerifyFilesPromises(Promise *pp, const ReportContext *report_contex
 
 static void FindFilePromiserObjects(Promise *pp, const ReportContext *report_context)
 {
-    char *val = GetConstraintValue("pathtype", pp, CF_SCALAR);
+    char *val = GetConstraintValue("pathtype", pp, RVAL_TYPE_SCALAR);
     int literal = (GetBooleanConstraint("copy_from", pp)) || ((val != NULL) && (strcmp(val, "literal") == 0));
 
 /* Check if we are searching over a regular expression */
@@ -656,7 +657,7 @@ static void FindFilePromiserObjects(Promise *pp, const ReportContext *report_con
     if (literal)
     {
         // Prime the promiser temporarily, may override later
-        NewScalar("this", "promiser", pp->promiser, cf_str);
+        NewScalar("this", "promiser", pp->promiser, DATA_TYPE_STRING);
         VerifyFilePromise(pp->promiser, pp, report_context);
     }
     else                        // Default is to expand regex paths

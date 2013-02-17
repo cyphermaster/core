@@ -48,7 +48,14 @@ typedef struct
 } Seq;
 
 #define SeqAt(seq, i) seq->data[i]
-#define SeqLength(seq) (seq->length)
+
+/**
+  @brief Length of the sequence.
+  @note On NULL sequence return size 0.
+  @param seq [in] sequence.
+  @return Sequence length.
+  */
+size_t SeqLength(const Seq *seq);
 
 /**
   @brief Create a new Sequence
@@ -80,6 +87,13 @@ typedef int (*SeqItemComparator) (const void *, const void *, void *user_data);
   @param item [in] The item to append. Note that this item may be passed to the item destructor specified in the constructor.
   */
 void SeqAppend(Seq *seq, void *item);
+
+/**
+ * @brief Append a sequence to this sequence. Only copies pointers.
+ * @param seq Sequence to append to
+ * @param items Sequence to copy pointers from.
+ */
+void SeqAppendSeq(Seq *seq, const Seq *items);
 
 /**
   @brief Linearly searches through the sequence and return the first item considered equal to the specified key.

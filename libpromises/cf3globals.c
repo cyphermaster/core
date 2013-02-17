@@ -30,8 +30,6 @@
 /*****************************************************************************/
 
 int SHOWREPORTS = false;
-int SHOW_PARSE_TREE = false;
-int USE_GCC_BRIEF_FORMAT = false;
 
 /*****************************************************************************/
 /* operational state                                                         */
@@ -40,22 +38,12 @@ int USE_GCC_BRIEF_FORMAT = false;
 int VERBOSE = false;
 int INFORM = false;
 int PARSING = false;
-int CFPARANOID = false;
-int REQUIRE_COMMENTS = CF_UNDEFINED;
 int LOOKUP = false;
-int IGNORE_MISSING_INPUTS = false;
-int IGNORE_MISSING_BUNDLES = false;
 int FIPS_MODE = false;
-int ALWAYS_VALIDATE = false;
-bool ALLCLASSESREPORT = false;
 
 struct utsname VSYSNAME;
 
-int XML = false;
-
 int CFA_MAXTHREADS = 10;
-int CFA_BACKGROUND = 0;
-int CFA_BACKGROUND_LIMIT = 1;
 int AM_BACKGROUND_PROCESS = false;
 int CF_PERSISTENCE = 10;
 
@@ -72,24 +60,17 @@ char LICENSE_COMPANY[CF_SMALLBUF] = { 0 };
 
 // These are used to measure graph complexity in know/agent
 
-int CSV = false;
 int CF_TOPICS = 0;              // objects
 int CF_OCCUR = 0;               // objects
-int CF_EDGES = 0;               // links or promises between them
 
-Rlist *MOUNTEDFSLIST = NULL;
 PromiseIdent *PROMISE_ID_LIST = NULL;
 Item *PROCESSTABLE = NULL;
-Item *PROCESSREFRESH = NULL;
 Item *ROTATED = NULL;
-Item *FSTABLIST = NULL;
 Item *DONELIST = NULL;
 
 char *CBUNDLESEQUENCE_STR;
 
 int EDIT_MODEL = false;
-int CF_MOUNTALL = false;
-int FSTAB_EDITS;
 int BOOTSTRAP = false;
 
 /*****************************************************************************/
@@ -104,15 +85,8 @@ double METER_REPAIRED[meter_endmark];
 /*****************************************************************************/
 
 Scope *VSCOPE = NULL;
-Rlist *VINPUTLIST = NULL;
-Rlist *BODYPARTS = NULL;
-Rlist *SUBBUNDLES = NULL;
-Rlist *ACCESSLIST = NULL;
 
-Rlist *SINGLE_COPY_LIST = NULL;
-Rlist *AUTO_DEFINE_LIST = NULL;
-Rlist *SINGLE_COPY_CACHE = NULL;
-Rlist *CF_STCK = NULL;
+Rlist *CF_STCK = NULL; // TODO: consider renaming to something comprehesible
 
 Item *EDIT_ANCHORS = NULL;
 
@@ -121,24 +95,9 @@ int LASTSEENEXPIREAFTER = SECONDS_PER_WEEK;
 
 char POLICY_SERVER[CF_BUFSIZE] = { 0 };
 
-char WEBDRIVER[CF_MAXVARSIZE] = { 0 };
-char BANNER[2 * CF_BUFSIZE] = { 0 };
-char FOOTER[CF_BUFSIZE] = { 0 };
-char STYLESHEET[CF_BUFSIZE] = { 0 };
-
-/*****************************************************************************/
-/* Windows version constants                                                 */
-/*****************************************************************************/
-
-unsigned int WINVER_MAJOR = 0;
-unsigned int WINVER_MINOR = 0;
-unsigned int WINVER_BUILD = 0;
-
 /*****************************************************************************/
 /* Compatability infrastructure                                              */
 /*****************************************************************************/
-
-double FORGETRATE = 0.7;
 
 int IGNORELOCK = false;
 int DONTDO = false;
@@ -153,9 +112,6 @@ char VDAY[3] = { 0 };
 char VMONTH[4] = { 0 };
 char VSHIFT[12] = { 0 };
 
-char PADCHAR = ' ';
-char PURGE = 'n';
-
 int ERRORCOUNT = 0;
 char VPREFIX[CF_MAXVARSIZE] = { 0 };
 
@@ -169,7 +125,7 @@ char *DEFAULT_COPYTYPE = NULL;
 RSA *PRIVKEY = NULL, *PUBKEY = NULL;
 char PUBKEY_DIGEST[CF_MAXVARSIZE] = { 0 };
 
-pthread_mutex_t MUTEXES[] =
+static pthread_mutex_t MUTEXES[] =
 {
     PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP,
     PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP,
@@ -239,7 +195,5 @@ int VEXPIREAFTER = 120;
 char BINDINTERFACE[CF_BUFSIZE] = { 0 };
 
 bool MINUSF = false;
-int EXCLAIM = true;
 
-Item *VSETUIDLIST = NULL;
 enum classes VSYSTEMHARDCLASS;

@@ -7,11 +7,10 @@ static Seq *LoadAndCheck(const char *filename)
     char path[1024];
     sprintf(path, "%s/%s", TESTDATADIR, filename);
 
-    Policy *p = PolicyNew();
-    ParserParseFile(p, path);
+    Policy *p = ParserParseFile(path);
 
     Seq *errs = SeqNew(10, PolicyErrorDestroy);
-    PolicyCheck(p, errs);
+    PolicyCheckPartial(p, errs);
 
     return errs;
 }
@@ -75,7 +74,7 @@ static void test_util_bundle_qualified_name(void **state)
     assert_string_equal("default:bar", fqname);
     free(fqname);
 
-    b->namespace = "foo";
+    b->ns = "foo";
     fqname = BundleQualifiedName(b);
     assert_string_equal("foo:bar", fqname);
     free(fqname);

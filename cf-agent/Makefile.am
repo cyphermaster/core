@@ -8,6 +8,10 @@ AM_CPPFLAGS = @CPPFLAGS@ -I$(srcdir)/../libpromises \
 	$(LIBACL_CPPFLAGS) \
 	$(LIBXML_CPPFLAGS)
 
+if HAVE_NOVA
+AM_CPPFLAGS += -I$(abs_top_srcdir)/nova/libcfagent
+endif
+
 AM_CFLAGS = @CFLAGS@ \
 	$(NOVA_CFLAGS) \
 	$(LIBVIRT_CFLAGS) \
@@ -59,8 +63,15 @@ cf_agent_SOURCES = \
         files_select.c \
         vercmp_internal.c vercmp_internal.h \
         vercmp.c vercmp.h \
-        verify_packages.c verify_packages.h \
-        agentdiagnostic.c
+        verify_packages.c verify_packages.h
+
+if HAVE_AVAHI_CLIENT
+if HAVE_AVAHI_COMMON
+cf_agent_SOURCES += \
+		findhub.c findhub_priv.h findhub.h \
+		load_avahi.c load_avahi.h
+endif
+endif
 
 CLEANFILES = *.gcno *.gcda
 

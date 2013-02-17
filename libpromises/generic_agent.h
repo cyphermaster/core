@@ -31,27 +31,57 @@
 
 typedef struct
 {
+    AgentType agent_type;
+
     Rlist *bundlesequence;
-    bool verify_promises;
     char *input_file;
+    bool check_not_writable_by_others;
+    bool check_runnable;
+    bool tty_interactive; // agent is running interactively, via tty/terminal interface
+
+    // change to evaluation behavior from the policy itself
+    bool ignore_missing_bundles;
+    bool ignore_missing_inputs;
+
+    union
+    {
+        struct
+        {
+            enum
+            {
+                GENERIC_AGENT_CONFIG_COMMON_POLICY_OUTPUT_FORMAT_NONE,
+                GENERIC_AGENT_CONFIG_COMMON_POLICY_OUTPUT_FORMAT_JSON
+            } policy_output_format;
+        } common;
+    } agent_specific;
 } GenericAgentConfig;
 
-Policy *GenericInitialize(char *agents, GenericAgentConfig *config, const ReportContext *report_context);
+void GenericAgentDiscoverContext(GenericAgentConfig *config, ReportContext *report_context);
+bool GenericAgentCheckPolicy(GenericAgentConfig *config, const ReportContext *report_context, bool force_validation);
+Policy *GenericAgentLoadPolicy(AgentType agent_type, GenericAgentConfig *config, const ReportContext *report_context);
+
 void InitializeGA(GenericAgentConfig *config, const ReportContext *report_context);
 void Syntax(const char *comp, const struct option options[], const char *hints[], const char *id);
 void ManPage(const char *component, const struct option options[], const char *hints[], const char *id);
 void PrintVersionBanner(const char *component);
-int CheckPromises(AgentType ag, const char *input_file, const ReportContext *report_context);
-Policy *ReadPromises(AgentType ag, char *agents, GenericAgentConfig *config, const ReportContext *report_context);
-int NewPromiseProposals(const char *input_file);
+int CheckPromises(const char *input_file, const ReportContext *report_context);
+Policy *ReadPromises(AgentType agent_type, GenericAgentConfig *config, const ReportContext *report_context);
+int NewPromiseProposals(const char *input_file, const Rlist *input_files);
 void CompilationReport(Policy *policy, char *fname);
 void HashVariables(Policy *policy, const char *name, const ReportContext *report_context);
-void HashControls(const Policy *policy);
+void HashControls(const Policy *policy, GenericAgentConfig *config);
 void CloseLog(void);
 Seq *ControlBodyConstraints(const Policy *policy, AgentType agent);
+
+/**
+ * @brief Conventience function for getting the effective list of input_files from common body control.
+ * @param policy Policy where inputs are specified
+ * @return Pointer to the Rlist in the DOM
+ */
+const Rlist *InputFiles(Policy *policy);
+
+
 void SetFacility(const char *retval);
-Bundle *GetBundle(const Policy *policy, const char *name, const char *agent);
-SubType *GetSubTypeForBundle(char *type, Bundle *bp);
 void CheckBundleParameters(char *scope, Rlist *args);
 void PromiseBanner(Promise *pp);
 void BannerBundle(Bundle *bp, Rlist *args);
@@ -61,10 +91,8 @@ ReportContext *OpenCompilationReportFiles(const char *fname);
 void CheckLicenses(void);
 void ReloadPromises(AgentType ag);
 
-ReportContext *OpenReports(const char *agents);
+ReportContext *OpenReports(AgentType agent_type);
 void CloseReports(const char *agents, ReportContext *report_context);
-
-
 
 GenericAgentConfig *GenericAgentConfigNewDefault(AgentType agent_type);
 void GenericAgentConfigDestroy(GenericAgentConfig *config);

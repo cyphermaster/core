@@ -25,7 +25,7 @@
 #include "cf3.defs.h"
 
 #include "env_context.h"
-#include "monitoring.h"
+#include "mon.h"
 #include "granules.h"
 #include "dbm_api.h"
 #include "policy.h"
@@ -43,8 +43,18 @@
 #include "generic_agent.h" // WritePID
 #include "files_lib.h"
 #include "unix.h"
+#include "verify_measurements.h"
+
+#ifdef HAVE_NOVA
+#include "cf.nova.h"
+#include "history.h"
+#endif
 
 #include <math.h>
+
+#ifndef HAVE_NOVA
+static void HistoryUpdate(Averages newvals);
+#endif
 
 /*****************************************************************************/
 /* Globals                                                                   */
@@ -54,6 +64,8 @@
 #define cf_noise_threshold 6    /* number that does not warrent large anomaly status */
 #define MON_THRESHOLD_HIGH 1000000      // samples should stay below this threshold
 #define LDT_BUFSIZE 10
+
+double FORGETRATE = 0.7;
 
 static char ENVFILE_NEW[CF_BUFSIZE];
 static char ENVFILE[CF_BUFSIZE];
@@ -617,7 +629,7 @@ static void ArmClasses(Averages av, char *timekey)
             }
 
             AppendItem(&classlist, buff, "2");
-            NewPersistentContext(buff, "measurements", CF_PERSISTENCE, cfpreserve);
+            NewPersistentContext(buff, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
         }
         else
         {
@@ -966,7 +978,7 @@ static double SetClasses(char *name, double variable, double av_expect, double a
             strcpy(buffer2, buffer);
             strcat(buffer2, "_microanomaly");
             AppendItem(classlist, buffer2, "2");
-            NewPersistentContext(buffer2, "measurements", CF_PERSISTENCE, cfpreserve);
+            NewPersistentContext(buffer2, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
         }
 
         return sig;             /* Granularity makes this silly */
@@ -1013,7 +1025,7 @@ static double SetClasses(char *name, double variable, double av_expect, double a
             strcpy(buffer2, buffer);
             strcat(buffer2, "_dev2");
             AppendItem(classlist, buffer2, "2");
-            NewPersistentContext(buffer2, "measurements", CF_PERSISTENCE, cfpreserve);
+            NewPersistentContext(buffer2, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
         }
 
         if (dev > 3.0 * sqrt(2.0))
@@ -1021,7 +1033,7 @@ static double SetClasses(char *name, double variable, double av_expect, double a
             strcpy(buffer2, buffer);
             strcat(buffer2, "_anomaly");
             AppendItem(classlist, buffer2, "3");
-            NewPersistentContext(buffer2, "measurements", CF_PERSISTENCE, cfpreserve);
+            NewPersistentContext(buffer2, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
         }
 
         return sig;
@@ -1126,8 +1138,6 @@ static double RejectAnomaly(double new, double average, double variance, double 
 
 static void GatherPromisedMeasures(const Policy *policy, const ReportContext *report_context)
 {
-    SubType *sp;
-    Promise *pp;
     char *scope;
 
     for (size_t i = 0; i < SeqLength(policy->bundles); i++)
@@ -1139,10 +1149,13 @@ static void GatherPromisedMeasures(const Policy *policy, const ReportContext *re
 
         if ((strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_MONITOR]) == 0) || (strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_COMMON]) == 0))
         {
-            for (sp = bp->subtypes; sp != NULL; sp = sp->next)  /* get schedule */
+            for (size_t j = 0; j < SeqLength(bp->subtypes); j++)
             {
-                for (pp = sp->promiselist; pp != NULL; pp = pp->next)
+                SubType *sp = SeqAt(bp->subtypes, j);
+
+                for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
                 {
+                    Promise *pp = SeqAt(sp->promises, ppi);
                     ExpandPromise(AGENT_TYPE_MONITOR, scope, pp, KeepMonitorPromise, report_context);
                 }
             }
@@ -1170,7 +1183,7 @@ static void KeepMonitorPromise(Promise *pp)
 {
     char *sp = NULL;
 
-    if (!IsDefinedClass(pp->classes, pp->namespace))
+    if (!IsDefinedClass(pp->classes, pp->ns))
     {
         CfOut(cf_verbose, "", "\n");
         CfOut(cf_verbose, "", ". . . . . . . . . . . . . . . . . . . . . . . . . . . . \n");
@@ -1222,3 +1235,8 @@ void MonOtherGatherData(double *cf_this)
 #endif
 }
 
+#ifndef HAVE_NOVA
+static void HistoryUpdate(Averages newvals)
+{
+}
+#endif

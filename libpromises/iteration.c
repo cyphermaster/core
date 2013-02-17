@@ -38,7 +38,7 @@ Rlist *NewIterationContext(const char *scopeid, Rlist *namelist)
 {
     Rlist *rps, *deref_listoflists = NULL;
     Rval retval;
-    enum cfdatatype dtype;
+    DataType dtype;
     CfAssoc *new;
     Rval newret;
 
@@ -58,9 +58,9 @@ Rlist *NewIterationContext(const char *scopeid, Rlist *namelist)
     {
         dtype = GetVariable(scopeid, rp->item, &retval);
 
-        if (dtype == cf_notype)
+        if (dtype == DATA_TYPE_NONE)
         {
-            CfOut(cf_error, "", " !! Couldn't locate variable %s apparently in %s\n", ScalarValue(rp), scopeid);
+            CfOut(cf_error, "", " !! Couldn't locate variable %s apparently in %s\n", RlistScalarValue(rp), scopeid);
             CfOut(cf_error, "",
                   " !! Could be incorrect use of a global iterator -- see reference manual on list substitution");
             continue;
@@ -68,25 +68,25 @@ Rlist *NewIterationContext(const char *scopeid, Rlist *namelist)
 
         /* Make a copy of list references in scope only, without the names */
 
-        if (retval.rtype == CF_LIST)
+        if (retval.type == RVAL_TYPE_LIST)
         {
             for (rps = (Rlist *) retval.item; rps != NULL; rps = rps->next)
             {
-                if (rps->type == CF_FNCALL)
+                if (rps->type == RVAL_TYPE_FNCALL)
                 {
                     FnCall *fp = (FnCall *) rps->item;
 
-                    newret = EvaluateFunctionCall(fp, NULL).rval;
-                    DeleteFnCall(fp);
+                    newret = FnCallEvaluate(fp, NULL).rval;
+                    FnCallDestroy(fp);
                     rps->item = newret.item;
-                    rps->type = newret.rtype;
+                    rps->type = newret.type;
                 }
             }
         }
 
         if ((new = NewAssoc(rp->item, retval, dtype)))
         {
-            OrthogAppendRlist(&deref_listoflists, new, CF_LIST);
+            RlistAppendOrthog(&deref_listoflists, new, RVAL_TYPE_LIST);
             rp->state_ptr = new->rval.item;
 
             while ((rp->state_ptr) && (strcmp(rp->state_ptr->item, CF_NULL_VALUE) == 0))

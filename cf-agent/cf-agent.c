@@ -36,6 +36,7 @@
 #include "verify_outputs.h"
 #include "verify_services.h"
 #include "verify_storage.h"
+#include "verify_files_utils.h"
 #include "addr_lib.h"
 #include "files_names.h"
 #include "files_interfaces.h"
@@ -58,9 +59,40 @@
 #include "logging.h"
 #include "nfs.h"
 #include "processes_select.h"
+#include "list.h"
+#include "fncall.h"
+#include "rlist.h"
+
+typedef enum
+{
+    TYPE_SEQUENCE_META,
+    TYPE_SEQUENCE_VARS,
+    TYPE_SEQUENCE_DEFAULTS,
+    TYPE_SEQUENCE_CONTEXTS,
+    TYPE_SEQUENCE_OUTPUTS,
+    TYPE_SEQUENCE_INTERFACES,
+    TYPE_SEQUENCE_FILES,
+    TYPE_SEQUENCE_PACKAGES,
+    TYPE_SEQUENCE_ENVIRONMENTS,
+    TYPE_SEQUENCE_METHODS,
+    TYPE_SEQUENCE_PROCESSES,
+    TYPE_SEQUENCE_SERVICES,
+    TYPE_SEQUENCE_COMMANDS,
+    TYPE_SEQUENCE_STORAGE,
+    TYPE_SEQUENCE_DATABASES,
+    TYPE_SEQUENCE_REPORTS,
+    TYPE_SEQUENCE_NONE
+} TypeSequence;
+
+#ifdef HAVE_AVAHI_CLIENT_CLIENT_H
+#ifdef HAVE_AVAHI_COMMON_ADDRESS_H
+#include "findhub.h"
+#endif
+#endif
 
 #ifdef HAVE_NOVA
-#include "nova_reporting.h"
+#include "cf.nova.h"
+#include "agent_reports.h"
 #else
 #include "reporting.h"
 #endif
@@ -69,29 +101,67 @@ extern int PR_KEPT;
 extern int PR_REPAIRED;
 extern int PR_NOTKEPT;
 
+static bool ALLCLASSESREPORT;
+static bool ALWAYS_VALIDATE;
+static bool CFPARANOID = false;
+
+static Rlist *ACCESSLIST;
+
+static int CFA_BACKGROUND = 0;
+static int CFA_BACKGROUND_LIMIT = 1;
+
+static Item *PROCESSREFRESH;
+
+static const char *AGENT_TYPESEQUENCE[] =
+{
+    "meta",
+    "vars",
+    "defaults",
+    "classes",                  /* Maelstrom order 2 */
+    "outputs",
+    "interfaces",
+    "files",
+    "packages",
+    "guest_environments",
+    "methods",
+    "processes",
+    "services",
+    "commands",
+    "storage",
+    "databases",
+    "reports",
+    NULL
+};
+
 /*******************************************************************/
 /* Agent specific variables                                        */
 /*******************************************************************/
 
 static void ThisAgentInit(void);
 static GenericAgentConfig *CheckOpts(int argc, char **argv);
-static void CheckAgentAccess(Rlist *list);
+static void CheckAgentAccess(Rlist *list, const Rlist *input_files);
+static void KeepControlPromises(Policy *policy);
 static void KeepAgentPromise(Promise *pp, const ReportContext *report_context);
-static int NewTypeContext(enum typesequence type);
-static void DeleteTypeContext(Policy *policy, enum typesequence type, const ReportContext *report_context);
-static void ClassBanner(enum typesequence type);
+static int NewTypeContext(TypeSequence type);
+static void DeleteTypeContext(Policy *policy, TypeSequence type, const ReportContext *report_context);
+static void ClassBanner(TypeSequence type);
 static void ParallelFindAndVerifyFilesPromises(Promise *pp, const ReportContext *report_context);
 static bool VerifyBootstrap(void);
-static void KeepPromiseBundles(Policy *policy, Rlist *bundlesequence, const ReportContext *report_context);
+static void KeepPromiseBundles(Policy *policy, GenericAgentConfig *config, const ReportContext *report_context);
 static void KeepPromises(Policy *policy, GenericAgentConfig *config, const ReportContext *report_context);
 static int NoteBundleCompliance(const Bundle *bundle, int save_pr_kept, int save_pr_repaired, int save_pr_notkept);
+#ifdef HAVE_AVAHI_CLIENT_CLIENT_H
+#ifdef HAVE_AVAHI_COMMON_ADDRESS_H
+static int AutomaticBootstrap();
+#endif
+#endif
 
 /*******************************************************************/
 /* Command line options                                            */
 /*******************************************************************/
 
 static const char *ID = "The main Cfengine agent is the instigator of change\n"
-    "in the system. In that sense it is the most important\n" "part of the Cfengine suite.\n";
+    "in the system. In that sense it is the most important\n" "part of the CFEngine suite.\n";
 
 static const struct option OPTIONS[15] =
 {
@@ -131,6 +201,12 @@ static const char *HINTS[15] =
     NULL
 };
 
+#ifndef HAVE_NOVA
+void NoteEfficiency(double e)
+{
+}
+#endif
+
 /*******************************************************************/
 
 int main(int argc, char *argv[])
@@ -138,9 +214,42 @@ int main(int argc, char *argv[])
     int ret = 0;
 
     GenericAgentConfig *config = CheckOpts(argc, argv);
+#ifdef HAVE_AVAHI_CLIENT_CLIENT_H
+#ifdef HAVE_AVAHI_COMMON_ADDRESS_H
+    if (NULL_OR_EMPTY(POLICY_SERVER) && BOOTSTRAP)
+    {
+        int ret = AutomaticBootstrap();
 
-    ReportContext *report_context = OpenReports("agent");
-    Policy *policy = GenericInitialize("agent", config, report_context);
+        if (ret < 0)
+        {
+            return 1;
+        }
+    }
+#endif
+#endif
+    ReportContext *report_context = OpenReports(config->agent_type);
+
+    GenericAgentDiscoverContext(config, report_context);
+
+    Policy *policy = NULL;
+    if (GenericAgentCheckPolicy(config, report_context, ALWAYS_VALIDATE))
+    {
+        policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+    }
+    else if (config->tty_interactive)
+    {
+        FatalError("CFEngine was not able to get confirmation of promises from cf-promises, please verify input file\n");
+    }
+    else
+    {
+        CfOut(cf_error, "", "CFEngine was not able to get confirmation of promises from cf-promises, so going to failsafe\n");
+        HardClass("failsafe_fallback");
+        GenericAgentConfigSetInputFile(config, "failsafe.cf");
+        policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+    }
+
+    CheckLicenses();
+
     ThisAgentInit();
     BeginAudit();
     KeepPromises(policy, config, report_context);
@@ -163,7 +272,7 @@ int main(int argc, char *argv[])
         ret = 1;
     }
 
-    EndAudit();
+    EndAudit(CFA_BACKGROUND);
     GenericAgentConfigDestroy(config);
 
     return ret;
@@ -203,7 +312,7 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
         case 'b':
             if (optarg)
             {
-                config->bundlesequence = SplitStringAsRList(optarg, ',');
+                config->bundlesequence = RlistFromSplitString(optarg, ',');
                 CBUNDLESEQUENCE_STR = optarg;
             }
             break;
@@ -300,7 +409,7 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             exit(0);
 
         case 'x':
-            AgentDiagnostic();
+            CfOut(cf_error, "", "Self-diagnostic functionality is retired");
             exit(0);
 
         case 'r':
@@ -368,7 +477,7 @@ static void KeepPromises(Policy *policy, GenericAgentConfig *config, const Repor
     double efficiency, model;
 
     KeepControlPromises(policy);
-    KeepPromiseBundles(policy, config->bundlesequence, report_context);
+    KeepPromiseBundles(policy, config, report_context);
 
 // TOPICS counts the number of currently defined promises
 // OCCUR counts the number of objects touched while verifying config
@@ -404,13 +513,13 @@ void KeepControlPromises(Policy *policy)
                 continue;
             }
 
-            if (GetVariable("control_common", cp->lval, &retval) != cf_notype)
+            if (GetVariable("control_common", cp->lval, &retval) != DATA_TYPE_NONE)
             {
                 /* Already handled in generic_agent */
                 continue;
             }
 
-            if (GetVariable("control_agent", cp->lval, &retval) == cf_notype)
+            if (GetVariable("control_agent", cp->lval, &retval) == DATA_TYPE_NONE)
             {
                 CfOut(cf_error, "", "Unknown lval %s in agent control body", cp->lval);
                 continue;
@@ -439,7 +548,7 @@ void KeepControlPromises(Policy *policy)
             if (strcmp(cp->lval, CFA_CONTROLBODY[cfa_agentaccess].lval) == 0)
             {
                 ACCESSLIST = (Rlist *) retval.item;
-                CheckAgentAccess(ACCESSLIST);
+                CheckAgentAccess(ACCESSLIST, InputFiles(policy));
                 continue;
             }
 
@@ -510,7 +619,7 @@ void KeepControlPromises(Policy *policy)
 
                 for (rp = (Rlist *) retval.item; rp != NULL; rp = rp->next)
                 {
-                    CfOut(cf_verbose, "", " -> ... %s\n", ScalarValue(rp));
+                    CfOut(cf_verbose, "", " -> ... %s\n", RlistScalarValue(rp));
                     NewClass(rp->item, NULL);
                 }
 
@@ -545,8 +654,7 @@ void KeepControlPromises(Policy *policy)
 
             if (strcmp(cp->lval, CFA_CONTROLBODY[cfa_binarypaddingchar].lval) == 0)
             {
-                PADCHAR = *(char *) retval.item;
-                CfOut(cf_verbose, "", "SET binarypaddingchar = %c\n", PADCHAR);
+                CfOut(cf_verbose, "", "binarypaddingchar is obsolete and does nothing\n");
                 continue;
             }
 
@@ -568,8 +676,7 @@ void KeepControlPromises(Policy *policy)
 
             if (strcmp(cp->lval, CFA_CONTROLBODY[cfa_exclamation].lval) == 0)
             {
-                EXCLAIM = GetBoolean(retval.item);
-                CfOut(cf_verbose, "", "SET exclamation %d\n", EXCLAIM);
+                CfOut(cf_verbose, "", "exclamation control is deprecated and does not do anything\n");
                 continue;
             }
 
@@ -601,7 +708,7 @@ void KeepControlPromises(Policy *policy)
 
             if (strcmp(cp->lval, CFA_CONTROLBODY[cfa_fautodefine].lval) == 0)
             {
-                AUTO_DEFINE_LIST = (Rlist *) retval.item;
+                SetFileAutoDefineList(RvalRlistValue(retval));
                 CfOut(cf_verbose, "", "SET file auto define list\n");
                 continue;
             }
@@ -630,7 +737,7 @@ void KeepControlPromises(Policy *policy)
             if (strcmp(cp->lval, CFA_CONTROLBODY[cfa_repository].lval) == 0)
             {
                 SetRepositoryLocation(retval.item);
-                CfOut(cf_verbose, "", "SET repository = %s\n", ScalarRvalValue(retval));
+                CfOut(cf_verbose, "", "SET repository = %s\n", RvalScalarValue(retval));
                 continue;
             }
 
@@ -648,8 +755,8 @@ void KeepControlPromises(Policy *policy)
 
                 for (rp = (Rlist *) retval.item; rp != NULL; rp = rp->next)
                 {
-                    AddFilenameToListOfSuspicious(ScalarValue(rp));
-                    CfOut(cf_verbose, "", "-> Considering %s as suspicious file", ScalarValue(rp));
+                    AddFilenameToListOfSuspicious(RlistScalarValue(rp));
+                    CfOut(cf_verbose, "", "-> Considering %s as suspicious file", RlistScalarValue(rp));
                 }
 
                 continue;
@@ -728,7 +835,7 @@ void KeepControlPromises(Policy *policy)
                 {
                     if (putenv(rp->item) != 0)
                     {
-                        CfOut(cf_error, "putenv", "Failed to set environment variable %s", ScalarValue(rp));
+                        CfOut(cf_error, "putenv", "Failed to set environment variable %s", RlistScalarValue(rp));
                     }
                 }
 
@@ -737,24 +844,24 @@ void KeepControlPromises(Policy *policy)
         }
     }
 
-    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_lastseenexpireafter].lval, &retval) != cf_notype)
+    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_lastseenexpireafter].lval, &retval) != DATA_TYPE_NONE)
     {
         LASTSEENEXPIREAFTER = Str2Int(retval.item) * 60;
     }
 
-    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_fips_mode].lval, &retval) != cf_notype)
+    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_fips_mode].lval, &retval) != DATA_TYPE_NONE)
     {
         FIPS_MODE = GetBoolean(retval.item);
         CfOut(cf_verbose, "", "SET FIPS_MODE = %d\n", FIPS_MODE);
     }
 
-    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_syslog_port].lval, &retval) != cf_notype)
+    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_syslog_port].lval, &retval) != DATA_TYPE_NONE)
     {
         SetSyslogPort(Str2Int(retval.item));
-        CfOut(cf_verbose, "", "SET syslog_port to %s", ScalarRvalValue(retval));
+        CfOut(cf_verbose, "", "SET syslog_port to %s", RvalScalarValue(retval));
     }
 
-    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_syslog_host].lval, &retval) != cf_notype)
+    if (GetVariable("control_common", CFG_CONTROLBODY[cfg_syslog_host].lval, &retval) != DATA_TYPE_NONE)
     {
         SetSyslogHost(Hostname2IPString(retval.item));
         CfOut(cf_verbose, "", "SET syslog_host to %s", Hostname2IPString(retval.item));
@@ -767,7 +874,7 @@ void KeepControlPromises(Policy *policy)
 
 /*********************************************************************/
 
-static void KeepPromiseBundles(Policy *policy, Rlist *bundlesequence, const ReportContext *report_context)
+static void KeepPromiseBundles(Policy *policy, GenericAgentConfig *config, const ReportContext *report_context)
 {
     Bundle *bp;
     Rlist *rp, *params;
@@ -776,20 +883,22 @@ static void KeepPromiseBundles(Policy *policy, Rlist *bundlesequence, const Repo
     Rval retval;
     int ok = true;
 
-    if (bundlesequence)
+    if (config->bundlesequence)
     {
         CfOut(cf_inform, "", " >> Using command line specified bundlesequence");
-        retval = (Rval) {bundlesequence, CF_LIST};
+        retval = (Rval) { config->bundlesequence, RVAL_TYPE_LIST };
     }
-    else if (GetVariable("control_common", "bundlesequence", &retval) == cf_notype)
+    else if (GetVariable("control_common", "bundlesequence", &retval) == DATA_TYPE_NONE)
     {
+        // TODO: somewhat frenzied way of telling user about an error
         CfOut(cf_error, "", " !! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
         CfOut(cf_error, "", " !! No bundlesequence in the common control body");
         CfOut(cf_error, "", " !! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
         exit(1);
     }
 
-    if (retval.rtype != CF_LIST)
+    // TODO: should've been checked a long time ago, remove?
+    if (retval.type != RVAL_TYPE_LIST)
     {
         FatalError("Promised bundlesequence was not a list");
     }
@@ -798,7 +907,7 @@ static void KeepPromiseBundles(Policy *policy, Rlist *bundlesequence, const Repo
     {
         switch (rp->type)
         {
-        case CF_SCALAR:
+        case RVAL_TYPE_SCALAR:
             name = (char *) rp->item;
             params = NULL;
 
@@ -808,7 +917,7 @@ static void KeepPromiseBundles(Policy *policy, Rlist *bundlesequence, const Repo
             }
 
             break;
-        case CF_FNCALL:
+        case RVAL_TYPE_FNCALL:
             fp = (FnCall *) rp->item;
             name = (char *) fp->name;
             params = (Rlist *) fp->args;
@@ -818,15 +927,15 @@ static void KeepPromiseBundles(Policy *policy, Rlist *bundlesequence, const Repo
             name = NULL;
             params = NULL;
             CfOut(cf_error, "", "Illegal item found in bundlesequence: ");
-            ShowRval(stdout, (Rval) {rp->item, rp->type});
+            RvalShow(stdout, (Rval) {rp->item, rp->type});
             printf(" = %c\n", rp->type);
             ok = false;
             break;
         }
 
-        if (!IGNORE_MISSING_BUNDLES)
+        if (!config->ignore_missing_bundles)
         {
-            if (!(GetBundle(policy, name, "agent") || (GetBundle(policy, name, "common"))))
+            if (!(PolicyGetBundle(policy, NULL, "agent", name) || (PolicyGetBundle(policy, NULL, "common", name))))
             {
                 CfOut(cf_error, "", "Bundle \"%s\" listed in the bundlesequence was not found\n", name);
                 ok = false;
@@ -842,7 +951,7 @@ static void KeepPromiseBundles(Policy *policy, Rlist *bundlesequence, const Repo
     if (VERBOSE || DEBUG)
     {
         printf("%s> -> Bundlesequence => ", VPREFIX);
-        ShowRval(stdout, retval);
+        RvalShow(stdout, retval);
         printf("\n");
     }
 
@@ -852,7 +961,7 @@ static void KeepPromiseBundles(Policy *policy, Rlist *bundlesequence, const Repo
     {
         switch (rp->type)
         {
-        case CF_FNCALL:
+        case RVAL_TYPE_FNCALL:
             fp = (FnCall *) rp->item;
             name = (char *) fp->name;
             params = (Rlist *) fp->args;
@@ -863,14 +972,14 @@ static void KeepPromiseBundles(Policy *policy, Rlist *bundlesequence, const Repo
             break;
         }
 
-        if ((bp = GetBundle(policy, name, "agent")) || (bp = GetBundle(policy, name, "common")))
+        if ((bp = PolicyGetBundle(policy, NULL, "agent", name)) || (bp = PolicyGetBundle(policy, NULL, "common", name)))
         {
-            char namespace[CF_BUFSIZE];
-            snprintf(namespace,CF_BUFSIZE,"%s_meta", name);
-            NewScope(namespace);
+            char ns[CF_BUFSIZE];
+            snprintf(ns,CF_BUFSIZE,"%s_meta", name);
+            NewScope(ns);
 
             SetBundleOutputs(bp->name);
-            AugmentScope(bp->name, bp->namespace, bp->args, params);
+            AugmentScope(bp->name, bp->ns, bp->args, params);
             BannerBundle(bp, params);
             THIS_BUNDLE = bp->name;
             DeletePrivateClassContext();        // Each time we change bundle
@@ -888,8 +997,7 @@ int ScheduleAgentOperations(Bundle *bp, const ReportContext *report_context)
 // NB - this function can be called recursively through "methods"
 {
     SubType *sp;
-    Promise *pp;
-    enum typesequence type;
+    TypeSequence type;
     int pass;
     int save_pr_kept = PR_KEPT;
     int save_pr_repaired = PR_REPAIRED;
@@ -907,7 +1015,7 @@ int ScheduleAgentOperations(Bundle *bp, const ReportContext *report_context)
         {
             ClassBanner(type);
 
-            if ((sp = GetSubTypeForBundle(AGENT_TYPESEQUENCE[type], bp)) == NULL)
+            if ((sp = BundleGetSubType(bp, AGENT_TYPESEQUENCE[type])) == NULL)
             {
                 continue;
             }
@@ -920,9 +1028,14 @@ int ScheduleAgentOperations(Bundle *bp, const ReportContext *report_context)
                 continue;
             }
 
-            for (pp = sp->promiselist; pp != NULL; pp = pp->next)
+            for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
             {
-                SaveClassEnvironment();
+                Promise *pp = SeqAt(sp->promises, ppi);
+
+                if (ALLCLASSESREPORT)
+                {
+                    SaveClassEnvironment();
+                }
 
                 if (pass == 1)  // Count the number of promises modelled for efficiency
                 {
@@ -958,16 +1071,15 @@ static void CheckAgentAccess(Rlist *list)
 
 #else
 
-static void CheckAgentAccess(Rlist *list)
+static void CheckAgentAccess(Rlist *list, const Rlist *input_files)
 {
-    Rlist *rp, *rp2;
     struct stat sb;
     uid_t uid;
     int access = false;
 
     uid = getuid();
 
-    for (rp = list; rp != NULL; rp = rp->next)
+    for (const Rlist *rp = list; rp != NULL; rp = rp->next)
     {
         if (Str2Uid(rp->item, NULL, NULL) == uid)
         {
@@ -975,38 +1087,35 @@ static void CheckAgentAccess(Rlist *list)
         }
     }
 
-    if (VINPUTLIST != NULL)
+    for (const Rlist *rp = input_files; rp != NULL; rp = rp->next)
     {
-        for (rp = VINPUTLIST; rp != NULL; rp = rp->next)
+        cfstat(rp->item, &sb);
+
+        if (ACCESSLIST)
         {
-            cfstat(rp->item, &sb);
-
-            if (ACCESSLIST)
+            for (const Rlist *rp2 = ACCESSLIST; rp2 != NULL; rp2 = rp2->next)
             {
-                for (rp2 = ACCESSLIST; rp2 != NULL; rp2 = rp2->next)
+                if (Str2Uid(rp2->item, NULL, NULL) == sb.st_uid)
                 {
-                    if (Str2Uid(rp2->item, NULL, NULL) == sb.st_uid)
-                    {
-                        access = true;
-                        break;
-                    }
-                }
-
-                if (!access)
-                {
-                    CfOut(cf_error, "", "File %s is not owned by an authorized user (security exception)",
-                          ScalarValue(rp));
-                    exit(1);
+                    access = true;
+                    break;
                 }
             }
-            else if (CFPARANOID && IsPrivileged())
+
+            if (!access)
             {
-                if (sb.st_uid != getuid())
-                {
-                    CfOut(cf_error, "", "File %s is not owned by uid %ju (security exception)", ScalarValue(rp),
-                          (uintmax_t)getuid());
-                    exit(1);
-                }
+                CfOut(cf_error, "", "File %s is not owned by an authorized user (security exception)",
+                      RlistScalarValue(rp));
+                exit(1);
+            }
+        }
+        else if (CFPARANOID && IsPrivileged())
+        {
+            if (sb.st_uid != getuid())
+            {
+                CfOut(cf_error, "", "File %s is not owned by uid %ju (security exception)", RlistScalarValue(rp),
+                      (uintmax_t)getuid());
+                exit(1);
             }
         }
     }
@@ -1022,7 +1131,7 @@ static void KeepAgentPromise(Promise *pp, const ReportContext *report_context)
     char *sp = NULL;
     struct timespec start = BeginMeasure();
 
-    if (!IsDefinedClass(pp->classes, pp->namespace))
+    if (!IsDefinedClass(pp->classes, pp->ns))
     {
         CfOut(cf_verbose, "", "\n");
         CfOut(cf_verbose, "", ". . . . . . . . . . . . . . . . . . . . . . . . . . . . \n");
@@ -1057,10 +1166,10 @@ static void KeepAgentPromise(Promise *pp, const ReportContext *report_context)
 
     if (strcmp("meta", pp->agentsubtype) == 0)
     {
-        char namespace[CF_BUFSIZE];
-        snprintf(namespace,CF_BUFSIZE,"%s_meta",pp->bundle);
-        NewScope(namespace);
-        ConvergeVarHashPromise(namespace, pp, true);
+        char ns[CF_BUFSIZE];
+        snprintf(ns,CF_BUFSIZE,"%s_meta",pp->bundle);
+        NewScope(ns);
+        ConvergeVarHashPromise(ns, pp, true);
         return;
     }
 
@@ -1178,22 +1287,22 @@ static void KeepAgentPromise(Promise *pp, const ReportContext *report_context)
 /* Type context                                                      */
 /*********************************************************************/
 
-static int NewTypeContext(enum typesequence type)
+static int NewTypeContext(TypeSequence type)
 {
 // get maxconnections
 
     switch (type)
     {
-    case kp_environments:
+    case TYPE_SEQUENCE_ENVIRONMENTS:
         NewEnvironmentsContext();
         break;
 
-    case kp_files:
+    case TYPE_SEQUENCE_FILES:
 
         ConnectionsInit();
         break;
 
-    case kp_processes:
+    case TYPE_SEQUENCE_PROCESSES:
 
         if (!LoadProcessTable(&PROCESSTABLE))
         {
@@ -1202,7 +1311,7 @@ static int NewTypeContext(enum typesequence type)
         }
         break;
 
-    case kp_storage:
+    case TYPE_SEQUENCE_STORAGE:
 
 #ifndef __MINGW32__                   // TODO: Run if implemented on Windows
         if (MOUNTEDFSLIST != NULL)
@@ -1224,27 +1333,27 @@ static int NewTypeContext(enum typesequence type)
 
 /*********************************************************************/
 
-static void DeleteTypeContext(Policy *policy, enum typesequence type, const ReportContext *report_context)
+static void DeleteTypeContext(Policy *policy, TypeSequence type, const ReportContext *report_context)
 {
     switch (type)
     {
-    case kp_classes:
+    case TYPE_SEQUENCE_CONTEXTS:
         HashVariables(policy, THIS_BUNDLE, report_context);
         break;
 
-    case kp_environments:
+    case TYPE_SEQUENCE_ENVIRONMENTS:
         DeleteEnvironmentsContext();
         break;
 
-    case kp_files:
+    case TYPE_SEQUENCE_FILES:
 
         ConnectionsCleanup();
         break;
 
-    case kp_processes:
+    case TYPE_SEQUENCE_PROCESSES:
         break;
 
-    case kp_storage:
+    case TYPE_SEQUENCE_STORAGE:
 #ifndef __MINGW32__
     {
         Attributes a = { {0} };
@@ -1270,7 +1379,7 @@ static void DeleteTypeContext(Policy *policy, enum typesequence type, const Repo
 #endif /* !__MINGW32__ */
         break;
 
-    case kp_packages:
+    case TYPE_SEQUENCE_PACKAGES:
 
         ExecuteScheduledPackages();
 
@@ -1287,11 +1396,11 @@ static void DeleteTypeContext(Policy *policy, enum typesequence type, const Repo
 
 /**************************************************************/
 
-static void ClassBanner(enum typesequence type)
+static void ClassBanner(TypeSequence type)
 {
     const Item *ip;
 
-    if (type != kp_interfaces)  /* Just parsed all local classes */
+    if (type != TYPE_SEQUENCE_INTERFACES)  /* Just parsed all local classes */
     {
         return;
     }
@@ -1467,3 +1576,45 @@ static int NoteBundleCompliance(const Bundle *bundle, int save_pr_kept, int save
 
     return CF_NOP;
 }
+
+#ifdef HAVE_AVAHI_CLIENT_CLIENT_H
+#ifdef HAVE_AVAHI_COMMON_ADDRESS_H
+static int AutomaticBootstrap()
+{
+    List *foundhubs = NULL;
+    int hubcount = ListHubs(&foundhubs);
+    
+    switch(hubcount)
+    {
+    case -1:
+        CfOut(cf_error, "", "Error while trying to find a Policy Server");
+        ListDestroy(&foundhubs);
+        return -1;
+    case 0:
+        CfOut(cf_reporting, "", "No hubs were found. Exiting.");
+        ListDestroy(&foundhubs);
+        return -1;
+    case 1:
+        CfOut(cf_reporting, "", "Found hub installed on:"
+                                                      "Hostname: %s"
+                                                      "IP Address: %s",
+                                                      ((HostProperties*)foundhubs)->Hostname,
+                                                      ((HostProperties*)foundhubs)->IPAddress);
+        strncpy(POLICY_SERVER, ((HostProperties*)foundhubs)->IPAddress, CF_BUFSIZE);
+        dlclose(avahi_handle);
+        break;
+    default:
+        CfOut(cf_reporting, "", "Found more than one hub registered in the network.\n"
+                                                      "Please bootstrap manually using IP from the list below:");
+        PrintList(foundhubs);
+        dlclose(avahi_handle);
+        ListDestroy(&foundhubs);
+        return -1;
+    };
+
+    ListDestroy(&foundhubs);
+
+    return 0;
+}
+#endif
+#endif

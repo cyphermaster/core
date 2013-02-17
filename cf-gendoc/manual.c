@@ -39,6 +39,11 @@
 #include "files_interfaces.h"
 #include "assoc.h"
 #include "cfstream.h"
+#include "rlist.h"
+
+#ifdef HAVE_NOVA
+#include "cf.nova.h"
+#endif
 
 extern char BUILD_DIR[CF_BUFSIZE];
 
@@ -46,7 +51,7 @@ static void TexinfoHeader(FILE *fout);
 static void TexinfoFooter(FILE *fout);
 static void TexinfoBodyParts(const char *source_dir, FILE *fout, const BodySyntax *bs, const char *context);
 static void TexinfoSubBodyParts(const char *source_dir, FILE *fout, BodySyntax *bs);
-static void TexinfoShowRange(FILE *fout, char *s, enum cfdatatype type);
+static void TexinfoShowRange(FILE *fout, char *s, DataType type);
 static void IncludeManualFile(const char *source_dir, FILE *fout, char *filename);
 static void TexinfoPromiseTypesFor(const char *source_dir, FILE *fout, const SubTypeSyntax *st);
 static void TexinfoSpecialFunction(const char *source_dir, FILE *fout, FnCallType fn);
@@ -136,10 +141,19 @@ void TexinfoManual(const char *source_dir, const char *output_file)
 
         if (!IsItemIn(done, st->bundle_type)) /* Avoid multiple reading if several modules */
         {
+            char bundle_filename[CF_BUFSIZE];
+            if (strcmp(st->bundle_type, "*") == 0)
+            {
+                strcpy(bundle_filename, "common");
+            }
+            else
+            {
+                strlcpy(bundle_filename, st->bundle_type, CF_BUFSIZE);
+            }
             PrependItem(&done, st->bundle_type, NULL);
-            snprintf(filename, CF_BUFSIZE - 1, "bundletypes/%s_example.texinfo", st->bundle_type);
+            snprintf(filename, CF_BUFSIZE - 1, "bundletypes/%s_example.texinfo", bundle_filename);
             IncludeManualFile(source_dir, fout, filename);
-            snprintf(filename, CF_BUFSIZE - 1, "bundletypes/%s_notes.texinfo", st->bundle_type);
+            snprintf(filename, CF_BUFSIZE - 1, "bundletypes/%s_notes.texinfo", bundle_filename);
             IncludeManualFile(source_dir, fout, filename);
 
             fprintf(fout, "@menu\n");
@@ -238,10 +252,10 @@ void TexinfoManual(const char *source_dir, const char *output_file)
 // scopes const and sys
 
     NewScope("edit");
-    NewScalar("edit", "filename", "x", cf_str);
+    NewScalar("edit", "filename", "x", DATA_TYPE_STRING);
 
     NewScope("match");
-    NewScalar("match", "0", "x", cf_str);
+    NewScalar("match", "0", "x", DATA_TYPE_STRING);
 
     for (const char **s = scopes; *s != NULL; ++s)
     {
@@ -414,11 +428,22 @@ static void TexinfoPromiseTypesFor(const char *source_dir, FILE *fout, const Sub
                 fprintf(fout, "\n\n@node %s in %s promises\n@section @code{%s} promises in @samp{%s}\n\n", st[j].subtype,
                     st[j].bundle_type, st[j].subtype, st[j].bundle_type);
             }
-            snprintf(filename, CF_BUFSIZE - 1, "promises/%s_intro.texinfo", st[j].subtype);
+
+            char subtype_filename[CF_BUFSIZE];
+            if (strcmp("*", st[j].subtype))
+            {
+                strcpy(subtype_filename, "common");
+            }
+            else
+            {
+                strlcpy(subtype_filename, st[j].subtype, CF_BUFSIZE);
+            }
+
+            snprintf(filename, CF_BUFSIZE - 1, "promises/%s_intro.texinfo", subtype_filename);
             IncludeManualFile(source_dir, fout, filename);
-            snprintf(filename, CF_BUFSIZE - 1, "promises/%s_example.texinfo", st[j].subtype);
+            snprintf(filename, CF_BUFSIZE - 1, "promises/%s_example.texinfo", subtype_filename);
             IncludeManualFile(source_dir, fout, filename);
-            snprintf(filename, CF_BUFSIZE - 1, "promises/%s_notes.texinfo", st[j].subtype);
+            snprintf(filename, CF_BUFSIZE - 1, "promises/%s_notes.texinfo", subtype_filename);
         }
         IncludeManualFile(source_dir, fout, filename);
         TexinfoBodyParts(source_dir, fout, st[j].bs, st[j].subtype);
@@ -460,7 +485,7 @@ static void TexinfoBodyParts(const char *source_dir, FILE *fout, const BodySynta
             fprintf(fout, "\n\n@node %s in %s\n@subsection @code{%s}\n\n@b{Type}: %s (Separate Bundle) \n", bs[i].lval,
                     context, bs[i].lval, CF_DATATYPES[bs[i].dtype]);
         }
-        else if (bs[i].dtype == cf_body)
+        else if (bs[i].dtype == DATA_TYPE_BODY)
         {
             fprintf(fout, "\n\n@node %s in %s\n@subsection @code{%s} (body template)\n@noindent @b{Type}: %s\n\n",
                     bs[i].lval, context, bs[i].lval, CF_DATATYPES[bs[i].dtype]);
@@ -582,14 +607,14 @@ static void TexinfoVariables(const char *source_dir, FILE *fout, char *scope)
         }
     }
 
-    DeleteRlist(list);
+    RlistDestroy(list);
 }
 
 /*******************************************************************/
 /* Level                                                           */
 /*******************************************************************/
 
-static void TexinfoShowRange(FILE *fout, char *s, enum cfdatatype type)
+static void TexinfoShowRange(FILE *fout, char *s, DataType type)
 {
     Rlist *list = NULL, *rp;
 
@@ -599,9 +624,9 @@ static void TexinfoShowRange(FILE *fout, char *s, enum cfdatatype type)
         return;
     }
 
-    if ((type == cf_opts) || (type == cf_olist))
+    if ((type == DATA_TYPE_OPTION) || (type == DATA_TYPE_OPTION_LIST))
     {
-        list = SplitStringAsRList(s, ',');
+        list = RlistFromSplitString(s, ',');
         fprintf(fout, "@noindent @b{Allowed input range}: @*\n@example");
 
         for (rp = list; rp != NULL; rp = rp->next)
@@ -610,7 +635,7 @@ static void TexinfoShowRange(FILE *fout, char *s, enum cfdatatype type)
         }
 
         fprintf(fout, "\n@end example\n");
-        DeleteRlist(list);
+        RlistDestroy(list);
     }
     else
     {
@@ -639,7 +664,7 @@ static void TexinfoSubBodyParts(const char *source_dir, FILE *fout, BodySyntax *
             fprintf(fout, "@item @code{%s}\n@b{Type}: %s\n (Separate Bundle) \n\n", bs[i].lval,
                     CF_DATATYPES[bs[i].dtype]);
         }
-        else if (bs[i].dtype == cf_body)
+        else if (bs[i].dtype == DATA_TYPE_BODY)
         {
             fprintf(fout, "@item @code{%s}\n@b{Type}: %s\n\n", bs[i].lval, CF_DATATYPES[bs[i].dtype]);
             TexinfoSubBodyParts(source_dir, fout, (BodySyntax *) bs[i].range);

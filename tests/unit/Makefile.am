@@ -1,6 +1,6 @@
 SUBDIRS = data
 
-AM_CFLAGS = $(NOVA_CFLAGS) -I$(srcdir)/../../libpromises -DTESTDATADIR='"$(srcdir)/data"' -I$(srcdir)/../../cf-serverd
+AM_CFLAGS = $(NOVA_CFLAGS) -I$(srcdir)/../../libpromises -DTESTDATADIR='"$(srcdir)/data"' -I$(srcdir)/../../cf-serverd -I$(srcdir)/../../cf-agent
 
 LDADD = ../../libpromises/libpromises.la libtest.la
 
@@ -61,6 +61,14 @@ check_PROGRAMS = \
 	timeout_test \
 	connection_management_test
 
+if HAVE_AVAHI_CLIENT
+if HAVE_AVAHI_COMMON
+check_PROGRAMS += \
+    findhub_test \
+    avahi_config_test
+endif
+endif
+
 TESTS = $(check_PROGRAMS)
 
 #
@@ -90,12 +98,26 @@ str_test_LDADD = libstr.la
 xml_writer_test_SOURCES = xml_writer_test.c ../../libutils/xml_writer.c
 xml_writer_test_LDADD = libtest.la libstr.la
 
-list_test_SOURCES = list_test.c ../../libutils/list.c
+list_test_SOURCES = list_test.c 
 
 refcount_test_SOURCES = refcount_test.c ../../libutils/refcount.c
 
 buffer_test_SOURCES = buffer_test.c ../../libutils/buffer.c
+if HAVE_AVAHI_CLIENT
+if HAVE_AVAHI_COMMON
 
+findhub_test_SOURCES = findhub_test.c ../../cf-agent/findhub.c ../../cf-agent/load_avahi.c
+
+if HAVE_NOVA
+avahi_config_test_SOURCES = avahi_config_test.c ../../cf-serverd/server.c ../../cf-serverd/enterprise_stubs_serverd.c ../../cf-serverd/server_transform.c
+avahi_config_test_LDADD = libtest.la ../../nova/libcfserverd/libcfserverd.la
+else
+avahi_config_test_SOURCES = avahi_config_test.c ../../cf-serverd/server.c ../../cf-serverd/enterprise_stubs_serverd.c ../../cf-serverd/server_transform.c
+avahi_config_test_LDADD = ../../libpromises/libpromises.la libtest.la
+endif
+
+endif
+endif
 #
 # file_writer_test overrides fclose(3) which causes gcov to fail as gcov
 # instrumentation code uses fclose(3).
@@ -121,6 +143,13 @@ dbm_migration_bundles_test_LDADD = libdb.la
 CLEANFILES = *.gcno *.gcda
 
 package_versions_compare_test_SOURCES = package_versions_compare_test.c ../../cf-agent/verify_packages.c ../../cf-agent/vercmp.c ../../cf-agent/vercmp_internal.c
+
+package_versions_compare_test_CPPFLAGS = $(AM_CPPFLAGS)
+package_versions_compare_test_LDADD = ../../libpromises/libpromises.la libtest.la
+if HAVE_NOVA
+package_versions_compare_test_CPPFLAGS += -I$(abs_top_srcdir)/nova/libcfagent
+package_versions_compare_test_LDADD += ../../nova/libcfagent/libcfagent.la
+endif
 
 sort_test_SOURCES = sort_test.c ../../libpromises/sort.c
 sort_test_LDADD = libtest.la

@@ -1,4 +1,4 @@
-/* 
+/*
 
    Copyright (C) Cfengine AS
 
@@ -37,73 +37,66 @@
 #include "string_lib.h"
 #include "transaction.h"
 #include "logging.h"
+#include "misc_lib.h"
+#include "rlist.h"
 
-static PromiseIdent *PromiseIdExists(char *namespace, char *handle);
+static PromiseIdent *PromiseIdExists(char *ns, char *handle);
 static void DeleteAllPromiseIdsRecurse(PromiseIdent *key);
 static int VerifyConstraintName(const char *lval);
-static void PostCheckConstraint(const char *type, const char *bundle, const char *lval, Rval rval);
 
 /*******************************************************************/
 
 // FIX: copied nearly verbatim from AppendConstraint, needs review
-static Constraint *ConstraintNew(const char *lval, Rval rval, const char *classes, bool references_body)
+
+
+Seq *ConstraintGetFromBody(Body *body, const char *lval)
 {
-    switch (rval.rtype)
+    Seq *matches = SeqNew(5, NULL);
+
+    for (size_t i = 0; i < SeqLength(body->conlist); i++)
     {
-    case CF_SCALAR:
-        CfDebug("   Appending Constraint: %s => %s\n", lval, (const char *) rval.item);
-        break;
-    case CF_FNCALL:
-        CfDebug("   Appending a function call to rhs\n");
-        break;
-    case CF_LIST:
-        CfDebug("   Appending a list to rhs\n");
+        Constraint *cp = SeqAt(body->conlist, i);
+        if (strcmp(cp->lval, lval) == 0)
+        {
+            SeqAppend(matches, cp);
+        }
     }
 
-    // Check class
-    if (THIS_AGENT_TYPE == AGENT_TYPE_COMMON)
+    return matches;
+}
+
+const char *ConstraintContext(const Constraint *cp)
+{
+    switch (cp->type)
     {
-        PostCheckConstraint("none", "none", lval, rval);
+    case POLICY_ELEMENT_TYPE_BODY:
+        return cp->classes;
+
+    case POLICY_ELEMENT_TYPE_BUNDLE:
+        return cp->parent.promise->classes;
+
+    default:
+        ProgrammingError("Constraint had parent element type: %d", cp->type);
+        return NULL;
+    }
+}
+
+Constraint *EffectiveConstraint(Seq *constraints)
+{
+    for (size_t i = 0; i < SeqLength(constraints); i++)
+    {
+        Constraint *cp = SeqAt(constraints, i);
+
+        const char *context = ConstraintContext(cp);
+        const char *ns = NamespaceFromConstraint(cp);
+
+        if (IsDefinedClass(context, ns))
+        {
+            return cp;
+        }
     }
 
-    Constraint *cp = xcalloc(1, sizeof(Constraint));
-
-    cp->lval = SafeStringDuplicate(lval);
-    cp->rval = rval;
-
-    cp->audit = AUDITPTR;
-    cp->classes = SafeStringDuplicate(classes);
-    cp->references_body = references_body;
-
-    return cp;
-}
-
-/*****************************************************************************/
-
-Constraint *ConstraintAppendToPromise(Promise *promise, const char *lval, Rval rval, const char *classes,
-                                      bool references_body)
-{
-    Constraint *cp = ConstraintNew(lval, rval, classes, references_body);
-    cp->type = POLICY_ELEMENT_TYPE_PROMISE;
-    cp->parent.promise = promise;
-
-    SeqAppend(promise->conlist, cp);
-
-    return cp;
-}
-
-/*****************************************************************************/
-
-Constraint *ConstraintAppendToBody(Body *body, const char *lval, Rval rval, const char *classes,
-                                   bool references_body)
-{
-    Constraint *cp = ConstraintNew(lval, rval, classes, references_body);
-    cp->type = POLICY_ELEMENT_TYPE_BODY;
-    cp->parent.body = body;
-
-    SeqAppend(body->conlist, cp);
-
-    return cp;
+    return NULL;
 }
 
 /*****************************************************************************/
@@ -116,8 +109,8 @@ void EditScalarConstraint(Seq *conlist, const char *lval, const char *rval)
 
         if (strcmp(lval, cp->lval) == 0)
         {
-            DeleteRvalItem(cp->rval);
-            cp->rval = (Rval) {xstrdup(rval), CF_SCALAR};
+            RvalDestroy(cp->rval);
+            cp->rval = (Rval) { xstrdup(rval), RVAL_TYPE_SCALAR };
             return;
         }
     }
@@ -127,7 +120,7 @@ void ConstraintDestroy(Constraint *cp)
 {
     if (cp)
     {
-        DeleteRvalItem(cp->rval);
+        RvalDestroy(cp->rval);
         free(cp->lval);
         free(cp->classes);
 
@@ -147,7 +140,7 @@ int GetBooleanConstraint(const char *lval, const Promise *pp)
 
         if (strcmp(cp->lval, lval) == 0)
         {
-            if (IsDefinedClass(cp->classes, pp->namespace))
+            if (IsDefinedClass(cp->classes, pp->ns))
             {
                 if (retval != CF_UNDEFINED)
                 {
@@ -160,10 +153,10 @@ int GetBooleanConstraint(const char *lval, const Promise *pp)
                 continue;
             }
 
-            if (cp->rval.rtype != CF_SCALAR)
+            if (cp->rval.type != RVAL_TYPE_SCALAR)
             {
                 CfOut(cf_error, "", " !! Type mismatch on rhs - expected type (%c) for boolean constraint \"%s\"\n",
-                      cp->rval.rtype, lval);
+                      cp->rval.type, lval);
                 PromiseRef(cf_error, pp);
                 FatalError("Aborted");
             }
@@ -213,10 +206,10 @@ int GetRawBooleanConstraint(const char *lval, const Seq *constraints)
                 continue;
             }
 
-            if (cp->rval.rtype != CF_SCALAR)
+            if (cp->rval.type != RVAL_TYPE_SCALAR)
             {
                 CfOut(cf_error, "", " !! Type mismatch - expected type (%c) for boolean constraint \"%s\"\n",
-                      cp->rval.rtype, lval);
+                      cp->rval.type, lval);
                 FatalError("Aborted");
             }
 
@@ -253,7 +246,7 @@ int GetBundleConstraint(const char *lval, const Promise *pp)
 
         if (strcmp(cp->lval, lval) == 0)
         {
-            if (IsDefinedClass(cp->classes, pp->namespace))
+            if (IsDefinedClass(cp->classes, pp->ns))
             {
                 if (retval != CF_UNDEFINED)
                 {
@@ -266,11 +259,11 @@ int GetBundleConstraint(const char *lval, const Promise *pp)
                 continue;
             }
 
-            if (!(cp->rval.rtype == CF_FNCALL || cp->rval.rtype == CF_SCALAR))
+            if (!(cp->rval.type == RVAL_TYPE_FNCALL || cp->rval.type == RVAL_TYPE_SCALAR))
             {
                 CfOut(cf_error, "",
                       "Anomalous type mismatch - type (%c) for bundle constraint %s did not match internals\n",
-                      cp->rval.rtype, lval);
+                      cp->rval.type, lval);
                 PromiseRef(cf_error, pp);
                 FatalError("Aborted");
             }
@@ -294,7 +287,7 @@ int GetIntConstraint(const char *lval, const Promise *pp)
 
         if (strcmp(cp->lval, lval) == 0)
         {
-            if (IsDefinedClass(cp->classes, pp->namespace))
+            if (IsDefinedClass(cp->classes, pp->ns))
             {
                 if (retval != CF_NOINT)
                 {
@@ -307,7 +300,7 @@ int GetIntConstraint(const char *lval, const Promise *pp)
                 continue;
             }
 
-            if (cp->rval.rtype != CF_SCALAR)
+            if (cp->rval.type != RVAL_TYPE_SCALAR)
             {
                 CfOut(cf_error, "",
                       "Anomalous type mismatch - expected type for int constraint %s did not match internals\n", lval);
@@ -334,7 +327,7 @@ double GetRealConstraint(const char *lval, const Promise *pp)
 
         if (strcmp(cp->lval, lval) == 0)
         {
-            if (IsDefinedClass(cp->classes, pp->namespace))
+            if (IsDefinedClass(cp->classes, pp->ns))
             {
                 if (retval != CF_NODOUBLE)
                 {
@@ -346,7 +339,7 @@ double GetRealConstraint(const char *lval, const Promise *pp)
                 continue;
             }
 
-            if (cp->rval.rtype != CF_SCALAR)
+            if (cp->rval.type != RVAL_TYPE_SCALAR)
             {
                 CfOut(cf_error, "",
                       "Anomalous type mismatch - expected type for int constraint %s did not match internals\n", lval);
@@ -395,7 +388,7 @@ mode_t GetOctalConstraint(const char *lval, const Promise *pp)
 
         if (strcmp(cp->lval, lval) == 0)
         {
-            if (IsDefinedClass(cp->classes, pp->namespace))
+            if (IsDefinedClass(cp->classes, pp->ns))
             {
                 if (retval != 077)
                 {
@@ -408,7 +401,7 @@ mode_t GetOctalConstraint(const char *lval, const Promise *pp)
                 continue;
             }
 
-            if (cp->rval.rtype != CF_SCALAR)
+            if (cp->rval.type != RVAL_TYPE_SCALAR)
             {
                 CfOut(cf_error, "",
                       "Anomalous type mismatch - expected type for int constraint %s did not match internals\n", lval);
@@ -445,7 +438,7 @@ uid_t GetUidConstraint(const char *lval, const Promise *pp)
 
         if (strcmp(cp->lval, lval) == 0)
         {
-            if (IsDefinedClass(cp->classes, pp->namespace))
+            if (IsDefinedClass(cp->classes, pp->ns))
             {
                 if (retval != CF_UNDEFINED)
                 {
@@ -458,7 +451,7 @@ uid_t GetUidConstraint(const char *lval, const Promise *pp)
                 continue;
             }
 
-            if (cp->rval.rtype != CF_SCALAR)
+            if (cp->rval.type != RVAL_TYPE_SCALAR)
             {
                 CfOut(cf_error, "",
                       "Anomalous type mismatch - expected type for owner constraint %s did not match internals\n",
@@ -498,7 +491,7 @@ gid_t GetGidConstraint(char *lval, const Promise *pp)
 
         if (strcmp(cp->lval, lval) == 0)
         {
-            if (IsDefinedClass(cp->classes, pp->namespace))
+            if (IsDefinedClass(cp->classes, pp->ns))
             {
                 if (retval != CF_UNDEFINED)
                 {
@@ -511,7 +504,7 @@ gid_t GetGidConstraint(char *lval, const Promise *pp)
                 continue;
             }
 
-            if (cp->rval.rtype != CF_SCALAR)
+            if (cp->rval.type != RVAL_TYPE_SCALAR)
             {
                 CfOut(cf_error, "",
                       "Anomalous type mismatch - expected type for group constraint %s did not match internals\n",
@@ -540,7 +533,7 @@ Rlist *GetListConstraint(const char *lval, const Promise *pp)
 
         if (strcmp(cp->lval, lval) == 0)
         {
-            if (IsDefinedClass(cp->classes, pp->namespace))
+            if (IsDefinedClass(cp->classes, pp->ns))
             {
                 if (retval != NULL)
                 {
@@ -553,7 +546,7 @@ Rlist *GetListConstraint(const char *lval, const Promise *pp)
                 continue;
             }
 
-            if (cp->rval.rtype != CF_LIST)
+            if (cp->rval.type != RVAL_TYPE_LIST)
             {
                 CfOut(cf_error, "", " !! Type mismatch on rhs - expected type for list constraint \"%s\" \n", lval);
                 PromiseRef(cf_error, pp);
@@ -590,7 +583,7 @@ Constraint *GetConstraint(const Promise *pp, const char *lval)
 
         if (strcmp(cp->lval, lval) == 0)
         {
-            if (IsDefinedClass(cp->classes, pp->namespace))
+            if (IsDefinedClass(cp->classes, pp->ns))
             {
                 if (retval != NULL)
                 {
@@ -609,11 +602,11 @@ Constraint *GetConstraint(const Promise *pp, const char *lval)
 
 /*****************************************************************************/
 
-void *GetConstraintValue(const char *lval, const Promise *pp, char rtype)
+void *GetConstraintValue(const char *lval, const Promise *pp, RvalType rtype)
 {
     const Constraint *constraint = GetConstraint(pp, lval);
 
-    if (constraint && constraint->rval.rtype == rtype)
+    if (constraint && constraint->rval.type == rtype)
     {
         return constraint->rval.item;
     }
@@ -627,14 +620,14 @@ void *GetConstraintValue(const char *lval, const Promise *pp, char rtype)
 
 void ReCheckAllConstraints(Promise *pp)
 {
-    char *sp, *handle = GetConstraintValue("handle", pp, CF_SCALAR);
+    char *sp, *handle = GetConstraintValue("handle", pp, RVAL_TYPE_SCALAR);
     PromiseIdent *prid;
     Item *ptr;
     int in_class_any = false;
 
     if (strcmp(pp->agentsubtype, "reports") == 0 && strcmp(pp->classes, "any") == 0)
     {
-        char *cl = GetConstraintValue("ifvarclass", pp, CF_SCALAR);
+        char *cl = GetConstraintValue("ifvarclass", pp, RVAL_TYPE_SCALAR);
 
         if (cl == NULL || strcmp(cl, "any") == 0)
         {
@@ -657,7 +650,7 @@ void ReCheckAllConstraints(Promise *pp)
         NewPromiser(pp);
     }
 
-    if (!IsDefinedClass(pp->classes, pp->namespace))
+    if (!IsDefinedClass(pp->classes, pp->ns))
     {
         return;
     }
@@ -675,7 +668,7 @@ void ReCheckAllConstraints(Promise *pp)
             return;
         }
 
-        if ((prid = PromiseIdExists(pp->namespace, handle)))
+        if ((prid = PromiseIdExists(pp->ns, handle)))
         {
             if ((strcmp(prid->filename, pp->audit->filename) != 0) || (prid->line_number != pp->offset.line))
             {
@@ -693,15 +686,6 @@ void ReCheckAllConstraints(Promise *pp)
         ThreadUnlock(cft_policy);
     }
 
-    if (REQUIRE_COMMENTS == true)
-    {
-        if (pp->ref == NULL && strcmp(pp->agentsubtype, "vars") != 0)
-        {
-            CfOut(cf_error, "", " !! Un-commented promise found, but comments have been required by policy\n");
-            PromiseRef(cf_error, pp);
-        }
-    }
-
     for (size_t i = 0; i < SeqLength(pp->conlist); i++)
     {
         Constraint *cp = SeqAt(pp->conlist, i);
@@ -712,7 +696,7 @@ void ReCheckAllConstraints(Promise *pp)
     {
         /* Multiple additions with same criterion will not be convergent -- but ignore for empty file baseline */
 
-        if ((sp = GetConstraintValue("select_line_matching", pp, CF_SCALAR)))
+        if ((sp = GetConstraintValue("select_line_matching", pp, RVAL_TYPE_SCALAR)))
         {
             if ((ptr = ReturnItemIn(EDIT_ANCHORS, sp)))
             {
@@ -736,7 +720,7 @@ void ReCheckAllConstraints(Promise *pp)
 
 /*****************************************************************************/
 
-static void PostCheckConstraint(const char *type, const char *bundle, const char *lval, Rval rval)
+void PostCheckConstraint(const char *type, const char *bundle, const char *lval, Rval rval)
 {
     SubTypeSyntax ss;
     int i, j, l, m;
@@ -747,7 +731,7 @@ static void PostCheckConstraint(const char *type, const char *bundle, const char
 
     if (DEBUG)
     {
-        ShowRval(stdout, rval);
+        RvalShow(stdout, rval);
         printf("\n");
     }
 
@@ -780,10 +764,10 @@ static void PostCheckConstraint(const char *type, const char *bundle, const char
 
                     for (l = 0; bs[l].lval != NULL; l++)
                     {
-                        if (bs[l].dtype == cf_bundle)
+                        if (bs[l].dtype == DATA_TYPE_BUNDLE)
                         {
                         }
-                        else if (bs[l].dtype == cf_body)
+                        else if (bs[l].dtype == DATA_TYPE_BODY)
                         {
                             bs2 = (BodySyntax *) bs[l].range;
 
@@ -812,7 +796,7 @@ static void PostCheckConstraint(const char *type, const char *bundle, const char
 
     for (i = 0; CF_COMMON_BODIES[i].lval != NULL; i++)
     {
-        if (CF_COMMON_BODIES[i].dtype == cf_body)
+        if (CF_COMMON_BODIES[i].dtype == DATA_TYPE_BODY)
         {
             continue;
         }
@@ -854,10 +838,10 @@ static int VerifyConstraintName(const char *lval)
 
                 for (l = 0; bs[l].lval != NULL; l++)
                 {
-                    if (bs[l].dtype == cf_bundle)
+                    if (bs[l].dtype == DATA_TYPE_BUNDLE)
                     {
                     }
-                    else if (bs[l].dtype == cf_body)
+                    else if (bs[l].dtype == DATA_TYPE_BODY)
                     {
                         bs2 = (BodySyntax *) bs[l].range;
 
@@ -904,7 +888,7 @@ PromiseIdent *NewPromiseId(char *handle, Promise *pp)
     char name[CF_BUFSIZE];
     ptr = xmalloc(sizeof(PromiseIdent));
 
-    snprintf(name, CF_BUFSIZE, "%s%c%s", pp->namespace, CF_NS, handle);
+    snprintf(name, CF_BUFSIZE, "%s%c%s", pp->ns, CF_NS, handle);
     ptr->filename = xstrdup(pp->audit->filename);
     ptr->line_number = pp->offset.line;
     ptr->handle = xstrdup(name);
@@ -948,12 +932,12 @@ void DeleteAllPromiseIds(void)
 
 /*****************************************************************************/
 
-static PromiseIdent *PromiseIdExists(char *namespace, char *handle)
+static PromiseIdent *PromiseIdExists(char *ns, char *handle)
 {
     PromiseIdent *key;
     char name[CF_BUFSIZE];
 
-    snprintf(name, CF_BUFSIZE, "%s%c%s", namespace, CF_NS, handle);
+    snprintf(name, CF_BUFSIZE, "%s%c%s", ns, CF_NS, handle);
     
     for (key = PROMISE_ID_LIST; key != NULL; key = key->next)
     {

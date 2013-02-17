@@ -1,4 +1,4 @@
-/* 
+/*
 
    Copyright (C) Cfengine AS
 
@@ -30,6 +30,8 @@
 #include "reporting.h"
 #include "cfstream.h"
 #include "logging.h"
+#include "syntax.h"
+#include "rlist.h"
 
 /*******************************************************************/
 
@@ -59,8 +61,8 @@ static const struct option OPTIONS[] =
     {"diagnostic", no_argument, 0, 'x'},
     {"analysis", no_argument, 0, 'a'},
     {"reports", no_argument, 0, 'r'},
-    {"parse-tree", no_argument, 0, 'p'},
-    {"gcc-brief-format", no_argument, 0, 'g'},
+    {"policy-output-format", required_argument, 0, 'p'},
+    {"full-check", no_argument, 0, 'c'},
     {NULL, 0, 0, '\0'}
 };
 
@@ -79,8 +81,8 @@ static const char *HINTS[] =
     "Activate internal diagnostics (developers only)",
     "Perform additional analysis of configuration",
     "Generate reports about configuration and insert into CFDB",
-    "Print a parse tree for the policy file in JSON format",
-    "Use the GCC brief-format for output",
+    "Output the parsed policy. Possible values: 'none', 'json'. Default is 'none'",
+    "Ensure full policy integrity checks",
     NULL
 };
 
@@ -91,9 +93,33 @@ static const char *HINTS[] =
 int main(int argc, char *argv[])
 {
     GenericAgentConfig *config = CheckOpts(argc, argv);
-    ReportContext *report_context = OpenReports("common");
+    ReportContext *report_context = OpenReports(config->agent_type);
     
-    GenericInitialize("common", config, report_context);
+    GenericAgentDiscoverContext(config, report_context);
+    Policy *policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+
+    if (SHOWREPORTS)
+    {
+        CompilationReport(policy, config->input_file);
+    }
+
+    CheckLicenses();
+
+    switch (config->agent_specific.common.policy_output_format)
+    {
+    case GENERIC_AGENT_CONFIG_COMMON_POLICY_OUTPUT_FORMAT_JSON:
+        {
+            JsonElement *json_policy = PolicyToJson(policy);
+            Writer *writer = FileWriter(stdout);
+            JsonElementPrint(writer, json_policy, 2);
+            WriterClose(writer);
+            JsonElementDestroy(json_policy);
+        }
+
+    case GENERIC_AGENT_CONFIG_COMMON_POLICY_OUTPUT_FORMAT_NONE:
+        break;
+    }
+
     ThisAgentInit();
     AnalyzePromiseConflicts();
 
@@ -123,10 +149,14 @@ GenericAgentConfig *CheckOpts(int argc, char **argv)
     int c;
     GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_COMMON);
 
-    while ((c = getopt_long(argc, argv, "advnIf:D:N:VSrxMb:pg:h", OPTIONS, &optindex)) != EOF)
+    while ((c = getopt_long(argc, argv, "advnIf:D:N:VSrxMb:p:cg:h", OPTIONS, &optindex)) != EOF)
     {
         switch ((char) c)
         {
+        case 'c':
+            config->check_runnable = true;
+            break;
+
         case 'f':
 
             if (optarg && (strlen(optarg) < 5))
@@ -146,10 +176,26 @@ GenericAgentConfig *CheckOpts(int argc, char **argv)
         case 'b':
             if (optarg)
             {
-                Rlist *bundlesequence = SplitStringAsRList(optarg, ',');
+                Rlist *bundlesequence = RlistFromSplitString(optarg, ',');
                 GenericAgentConfigSetBundleSequence(config, bundlesequence);
-                DeleteRlist(bundlesequence);
+                RlistDestroy(bundlesequence);
                 CBUNDLESEQUENCE_STR = optarg; // TODO: wtf is this
+            }
+            break;
+
+        case 'p':
+            if (strcmp("none", optarg) == 0)
+            {
+                config->agent_specific.common.policy_output_format = GENERIC_AGENT_CONFIG_COMMON_POLICY_OUTPUT_FORMAT_NONE;
+            }
+            else if (strcmp("json", optarg) == 0)
+            {
+                config->agent_specific.common.policy_output_format = GENERIC_AGENT_CONFIG_COMMON_POLICY_OUTPUT_FORMAT_JSON;
+            }
+            else
+            {
+                CfOut(cf_error, "", "Invalid policy output format: '%s'. Possible values are 'none', 'json'", optarg);
+                exit(EXIT_FAILURE);
             }
             break;
 
@@ -193,25 +239,17 @@ GenericAgentConfig *CheckOpts(int argc, char **argv)
             exit(0);
 
         case 'r':
-            PrependRScalar(&GOALS, "goal.*", CF_SCALAR);
+            RlistPrependScalar(&GOALS, "goal.*", RVAL_TYPE_SCALAR);
             SHOWREPORTS = true;
             break;
 
         case 'x':
-            SelfDiagnostic();
+            CfOut(cf_error, "", "Self-diagnostic functionality is retired.");
             exit(0);
 
         case 'a':
             printf("Self-analysis is not yet implemented.\n");
             exit(0);
-            break;
-
-        case 'p':
-            SHOW_PARSE_TREE = true;
-            break;
-
-        case 'g':
-            USE_GCC_BRIEF_FORMAT = true;
             break;
 
         default:

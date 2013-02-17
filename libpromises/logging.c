@@ -34,6 +34,11 @@
 #include "string_lib.h"
 #include "transaction.h"
 #include "constraints.h"
+#include "rlist.h"
+
+#ifdef HAVE_NOVA
+#include "cf.nova.h"
+#endif
 
 #define CF_VALUE_LOG      "cf_value.log"
 
@@ -62,7 +67,7 @@ void BeginAudit()
 
 /*****************************************************************************/
 
-void EndAudit(void)
+void EndAudit(int background_tasks)
 {
     if (!END_AUDIT_REQUIRED)
     {
@@ -105,7 +110,7 @@ void EndAudit(void)
 
     double total = (double) (PR_KEPT + PR_NOTKEPT + PR_REPAIRED) / 100.0;
 
-    if (GetVariable("control_common", "version", &retval) != cf_notype)
+    if (GetVariable("control_common", "version", &retval) != DATA_TYPE_NONE)
     {
         sp = (char *) retval.item;
     }
@@ -122,7 +127,7 @@ void EndAudit(void)
     }
     else
     {
-        LogTotalCompliance(sp);
+        LogTotalCompliance(sp, background_tasks);
     }
 }
 
@@ -172,7 +177,7 @@ void ClassAuditLog(const Promise *pp, Attributes attr, char status, char *reason
             }
         }
 
-        AddAllClasses(pp->namespace, attr.classes.change, attr.classes.persist, attr.classes.timer);
+        AddAllClasses(pp->ns, attr.classes.change, attr.classes.persist, attr.classes.timer);
         MarkPromiseHandleDone(pp);
         DeleteAllClasses(attr.classes.del_change);
 
@@ -213,7 +218,7 @@ void ClassAuditLog(const Promise *pp, Attributes attr, char status, char *reason
 #endif
         }
 
-        AddAllClasses(pp->namespace, attr.classes.timeout, attr.classes.persist, attr.classes.timer);
+        AddAllClasses(pp->ns, attr.classes.timeout, attr.classes.persist, attr.classes.timer);
         DeleteAllClasses(attr.classes.del_notkept);
 
         if (IsPromiseValuableForLogging(pp))
@@ -235,7 +240,7 @@ void ClassAuditLog(const Promise *pp, Attributes attr, char status, char *reason
 #endif
         }
 
-        AddAllClasses(pp->namespace, attr.classes.failure, attr.classes.persist, attr.classes.timer);
+        AddAllClasses(pp->ns, attr.classes.failure, attr.classes.persist, attr.classes.timer);
         DeleteAllClasses(attr.classes.del_notkept);
 
         if (IsPromiseValuableForLogging(pp))
@@ -257,7 +262,7 @@ void ClassAuditLog(const Promise *pp, Attributes attr, char status, char *reason
 #endif
         }
 
-        AddAllClasses(pp->namespace, attr.classes.denied, attr.classes.persist, attr.classes.timer);
+        AddAllClasses(pp->ns, attr.classes.denied, attr.classes.persist, attr.classes.timer);
         DeleteAllClasses(attr.classes.del_notkept);
 
         if (IsPromiseValuableForLogging(pp))
@@ -279,7 +284,7 @@ void ClassAuditLog(const Promise *pp, Attributes attr, char status, char *reason
 #endif
         }
 
-        AddAllClasses(pp->namespace, attr.classes.interrupt, attr.classes.persist, attr.classes.timer);
+        AddAllClasses(pp->ns, attr.classes.interrupt, attr.classes.persist, attr.classes.timer);
         DeleteAllClasses(attr.classes.del_notkept);
 
         if (IsPromiseValuableForLogging(pp))
@@ -292,7 +297,7 @@ void ClassAuditLog(const Promise *pp, Attributes attr, char status, char *reason
     case CF_UNKNOWN:
     case CF_NOP:
 
-        AddAllClasses(pp->namespace, attr.classes.kept, attr.classes.persist, attr.classes.timer);
+        AddAllClasses(pp->ns, attr.classes.kept, attr.classes.persist, attr.classes.timer);
         DeleteAllClasses(attr.classes.del_kept);
 
         if (IsPromiseValuableForLogging(pp))
@@ -349,7 +354,7 @@ void PromiseBanner(Promise *pp)
     char handle[CF_MAXVARSIZE];
     const char *sp;
 
-    if ((sp = GetConstraintValue("handle", pp, CF_SCALAR)) || (sp = PromiseID(pp)))
+    if ((sp = GetConstraintValue("handle", pp, RVAL_TYPE_SCALAR)) || (sp = PromiseID(pp)))
     {
         strncpy(handle, sp, CF_MAXVARSIZE - 1);
     }
@@ -372,7 +377,7 @@ void PromiseBanner(Promise *pp)
         if (VERBOSE)
         {
             printf("\n%s>     Promise made to (stakeholders): ", VPREFIX);
-            ShowRval(stdout, pp->promisee);
+            RvalShow(stdout, pp->promisee);
         }
     }
 
@@ -406,7 +411,7 @@ void BannerSubBundle(Bundle *bp, Rlist *params)
     if (params && (VERBOSE || DEBUG))
     {
         printf("(");
-        ShowRlist(stdout, params);
+        RlistShow(stdout, params);
         printf(" )\n");
     }
     else
@@ -433,6 +438,6 @@ void FatalError(char *s, ...)
         CfOut(cf_error, "", "Fatal CFEngine error: %s", buf);
     }
 
-    EndAudit();
+    EndAudit(0);
     exit(1);
 }

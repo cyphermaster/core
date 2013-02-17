@@ -74,12 +74,12 @@ ExpectedVars expected_vars[] =
     {"domain", "cfengine.com"},
 };
 
-void NewScalar(const char *namespace, const char *varname, const char *value, enum cfdatatype type)
+void NewScalar(const char *namespace, const char *varname, const char *value, DataType type)
 {
     int i;
 
     assert_string_equal(namespace, "sys");
-    assert_int_equal(type, cf_str);
+    assert_int_equal(type, DATA_TYPE_STRING);
 
     for (i = 0; i < sizeof(expected_vars) / sizeof(expected_vars[0]); ++i)      /* LCOV_EXCL_LINE */
     {
@@ -124,6 +124,8 @@ int main()
 /* LCOV_EXCL_START */
 
 /* Stub out functions we do not use in test */
+
+int LOOKUP = false;
 
 void __ProgrammingError(const char *file, int lineno, const char *format, ...)
 {
@@ -262,17 +264,17 @@ void DeleteVariable(const char *scope, const char *id)
     fail();
 }
 
-Rlist *ParseShownRlist(char *string)
+Rlist *RlistParseShown(char *string)
 {
     fail();
 }
 
-void NewList(const char *scope, const char *lval, void *rval, enum cfdatatype dt)
+void NewList(const char *scope, const char *lval, void *rval, DataType dt)
 {
     fail();
 }
 
-void DeleteRlist(Rlist *list)
+void RlistDestroy(Rlist *list)
 {
     fail();
 }

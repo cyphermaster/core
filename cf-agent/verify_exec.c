@@ -61,18 +61,18 @@ void VerifyExecPromise(Promise *pp)
 
     a = GetExecAttributes(pp);
 
-    NewScalar("this", "promiser", pp->promiser, cf_str);
+    NewScalar("this", "promiser", pp->promiser, DATA_TYPE_STRING);
 
     if (!SyntaxCheckExec(a, pp))
     {
-        cfPS(cf_error, CF_FAIL, "", pp, a, "%s", "");
+        // cfPS(cf_error, CF_FAIL, "", pp, a, "");
         DeleteScalar("this", "promiser");
         return;
     }
 
     if (PromiseKeptExec(a, pp))
     {
-        cfPS(cf_inform, CF_NOP, "", pp, a, "%s", "");
+        // cfPS(cf_inform, CF_NOP, "", pp, a, "");
         DeleteScalar("this", "promiser");
         return;
     }
@@ -83,7 +83,7 @@ void VerifyExecPromise(Promise *pp)
 
     if (thislock.lock == NULL)
     {
-        cfPS(cf_inform, CF_FAIL, "", pp, a, "%s", "");
+        // cfPS(cf_inform, CF_FAIL, "", pp, a, "");
         DeleteScalar("this", "promiser");
         return;
     }
@@ -93,15 +93,15 @@ void VerifyExecPromise(Promise *pp)
     switch (RepairExec(a, pp))
     {
     case ACTION_RESULT_OK:
-        cfPS(cf_inform, CF_CHG, "", pp, a, "%s", "");
+        // cfPS(cf_inform, CF_CHG, "", pp, a, "");
         break;
 
     case ACTION_RESULT_TIMEOUT:
-        cfPS(cf_error, CF_TIMEX, "", pp, a, "%s", "");
+        // cfPS(cf_error, CF_TIMEX, "", pp, a, "");
         break;
 
     case ACTION_RESULT_FAILED:
-        cfPS(cf_inform, CF_FAIL, "", pp, a, "%s", "");
+        // cfPS(cf_inform, CF_FAIL, "", pp, a, "");
         break;
 
     default:
@@ -333,7 +333,7 @@ static ActionResult RepairExec(Attributes a, Promise *pp)
 
                 if (a.module)
                 {
-                    ModuleProtocol(cmdline, line, !a.contain.nooutput, pp->namespace);
+                    ModuleProtocol(cmdline, line, !a.contain.nooutput, pp->ns);
                 }
                 else if ((!a.contain.nooutput) && (NonEmptyLine(line)))
                 {

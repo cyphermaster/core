@@ -36,17 +36,18 @@
 #include "cfstream.h"
 #include "logging.h"
 #include "misc_lib.h"
+#include "rlist.h"
 
 static int IsCf3Scalar(char *str);
 static int CompareVariableValue(Rval rval, CfAssoc *ap);
 
 void LoadSystemConstants()
 {
-    NewScalar("const", "dollar", "$", cf_str);
-    NewScalar("const", "n", "\n", cf_str);
-    NewScalar("const", "r", "\r", cf_str);
-    NewScalar("const", "t", "\t", cf_str);
-    NewScalar("const", "endl", "\n", cf_str);
+    NewScalar("const", "dollar", "$", DATA_TYPE_STRING);
+    NewScalar("const", "n", "\n", DATA_TYPE_STRING);
+    NewScalar("const", "r", "\r", DATA_TYPE_STRING);
+    NewScalar("const", "t", "\t", DATA_TYPE_STRING);
+    NewScalar("const", "endl", "\n", DATA_TYPE_STRING);
 /* NewScalar("const","0","\0",cf_str);  - this cannot work */
 
 }
@@ -64,18 +65,18 @@ void ForceScalar(char *lval, char *rval)
         return;
     }
 
-    if (GetVariable("match", lval, &retval) != cf_notype)
+    if (GetVariable("match", lval, &retval) != DATA_TYPE_NONE)
     {
         DeleteVariable("match", lval);
     }
 
-    NewScalar("match", lval, rval, cf_str);
+    NewScalar("match", lval, rval, DATA_TYPE_STRING);
     CfDebug("Setting local variable \"match.%s\" context; $(%s) = %s\n", lval, lval, rval);
 }
 
 /*******************************************************************/
 
-void NewScalar(const char *scope, const char *lval, const char *rval, enum cfdatatype dt)
+void NewScalar(const char *scope, const char *lval, const char *rval, DataType dt)
 {
     Rval rvald;
     Scope *ptr;
@@ -92,7 +93,7 @@ void NewScalar(const char *scope, const char *lval, const char *rval, enum cfdat
 
 // Newscalar allocates memory through NewAssoc
 
-    if (GetVariable(scope, lval, &rvald) != cf_notype)
+    if (GetVariable(scope, lval, &rvald) != DATA_TYPE_NONE)
     {
         DeleteScalar(scope, lval);
     }
@@ -101,7 +102,7 @@ void NewScalar(const char *scope, const char *lval, const char *rval, enum cfdat
  * We know AddVariableHash does not change passed Rval structure or its
  * contents, but we have no easy way to express it in C type system, hence cast.
  */
-    AddVariableHash(scope, lval, (Rval) {(char *) rval, CF_SCALAR}, dt, NULL, 0);
+    AddVariableHash(scope, lval, (Rval) {(char *) rval, RVAL_TYPE_SCALAR }, dt, NULL, 0);
 }
 
 /*******************************************************************/
@@ -123,21 +124,21 @@ void DeleteScalar(const char *scope_name, const char *lval)
 
 /*******************************************************************/
 
-void NewList(const char *scope, const char *lval, void *rval, enum cfdatatype dt)
+void NewList(const char *scope, const char *lval, void *rval, DataType dt)
 {
     Rval rvald;
 
-    if (GetVariable(scope, lval, &rvald) != cf_notype)
+    if (GetVariable(scope, lval, &rvald) != DATA_TYPE_NONE)
     {
         DeleteVariable(scope, lval);
     }
 
-    AddVariableHash(scope, lval, (Rval) {rval, CF_LIST}, dt, NULL, 0);
+    AddVariableHash(scope, lval, (Rval) {rval, RVAL_TYPE_LIST }, dt, NULL, 0);
 }
 
 /*******************************************************************/
 
-enum cfdatatype GetVariable(const char *scope, const char *lval, Rval *returnv)
+DataType GetVariable(const char *scope, const char *lval, Rval *returnv)
 {
     Scope *ptr = NULL;
     char scopeid[CF_MAXVARSIZE], vlval[CF_MAXVARSIZE], sval[CF_MAXVARSIZE];
@@ -148,8 +149,8 @@ enum cfdatatype GetVariable(const char *scope, const char *lval, Rval *returnv)
 
     if (lval == NULL)
     {
-        *returnv = (Rval) {NULL, CF_SCALAR};
-        return cf_notype;
+        *returnv = (Rval) {NULL, RVAL_TYPE_SCALAR };
+        return DATA_TYPE_NONE;
     }
 
     if (!IsExpandable(lval))
@@ -166,9 +167,9 @@ enum cfdatatype GetVariable(const char *scope, const char *lval, Rval *returnv)
         {
             /* C type system does not allow us to express the fact that returned
                value may contain immutable string. */
-            *returnv = (Rval) {(char *) lval, CF_SCALAR};
+            *returnv = (Rval) {(char *) lval, RVAL_TYPE_SCALAR };
             CfDebug("Couldn't expand array-like variable (%s) due to undefined dependencies\n", lval);
-            return cf_notype;
+            return DATA_TYPE_NONE;
         }
     }
 
@@ -197,8 +198,8 @@ enum cfdatatype GetVariable(const char *scope, const char *lval, Rval *returnv)
         CfDebug("Scope \"%s\" for variable \"%s\" does not seem to exist\n", scopeid, vlval);
         /* C type system does not allow us to express the fact that returned
            value may contain immutable string. */
-        *returnv = (Rval) {(char *) lval, CF_SCALAR};
-        return cf_notype;
+        *returnv = (Rval) {(char *) lval, RVAL_TYPE_SCALAR };
+        return DATA_TYPE_NONE;
     }
 
     CfDebug("GetVariable(%s,%s): using scope '%s' for variable '%s'\n", scopeid, vlval, ptr->scope, vlval);
@@ -212,8 +213,8 @@ enum cfdatatype GetVariable(const char *scope, const char *lval, Rval *returnv)
            value may contain immutable string. */
 
 
-        *returnv = (Rval) {(char *) lval, CF_SCALAR};
-        return cf_notype;
+        *returnv = (Rval) {(char *) lval, RVAL_TYPE_SCALAR };
+        return DATA_TYPE_NONE;
 
     }
 
@@ -221,7 +222,7 @@ enum cfdatatype GetVariable(const char *scope, const char *lval, Rval *returnv)
 
     if (DEBUG)
     {
-        ShowRval(stdout, assoc->rval);
+        RvalShow(stdout, assoc->rval);
     }
     CfDebug("}\n");
 
@@ -257,12 +258,12 @@ static int CompareVariableValue(Rval rval, CfAssoc *ap)
         return 1;
     }
 
-    switch (rval.rtype)
+    switch (rval.type)
     {
-    case CF_SCALAR:
+    case RVAL_TYPE_SCALAR:
         return strcmp(ap->rval.item, rval.item);
 
-    case CF_LIST:
+    case RVAL_TYPE_LIST:
         list = (const Rlist *) rval.item;
 
         for (rp = list; rp != NULL; rp = rp->next)
@@ -287,9 +288,9 @@ static int CompareVariableValue(Rval rval, CfAssoc *ap)
 void DefaultVarPromise(Promise *pp)
 
 {
-    char *regex = GetConstraintValue("if_match_regex", pp, CF_SCALAR);
+    char *regex = GetConstraintValue("if_match_regex", pp, RVAL_TYPE_SCALAR);
     Rval rval;
-    enum cfdatatype dt;
+    DataType dt;
     Rlist *rp;
     bool okay = true;
 
@@ -297,9 +298,9 @@ void DefaultVarPromise(Promise *pp)
 
     switch (dt)
        {
-       case cf_str:
-       case cf_int:
-       case cf_real:
+       case DATA_TYPE_STRING:
+       case DATA_TYPE_INT:
+       case DATA_TYPE_REAL:
 
            if (regex && !FullTextMatch(regex,rval.item))
               {
@@ -313,9 +314,9 @@ void DefaultVarPromise(Promise *pp)
 
            break;
            
-       case cf_slist:
-       case cf_ilist:
-       case cf_rlist:
+       case DATA_TYPE_STRING_LIST:
+       case DATA_TYPE_INT_LIST:
+       case DATA_TYPE_REAL_LIST:
 
            if (regex)
               {
@@ -357,10 +358,10 @@ int UnresolvedVariables(CfAssoc *ap, char rtype)
 
     switch (rtype)
     {
-    case CF_SCALAR:
+    case RVAL_TYPE_SCALAR:
         return IsCf3VarString(ap->rval.item);
 
-    case CF_LIST:
+    case RVAL_TYPE_LIST:
         list = (Rlist *) ap->rval.item;
 
         for (rp = list; rp != NULL; rp = rp->next)
@@ -386,7 +387,7 @@ int UnresolvedArgs(Rlist *args)
 
     for (rp = args; rp != NULL; rp = rp->next)
     {
-        if (rp->type != CF_SCALAR)
+        if (rp->type != RVAL_TYPE_SCALAR)
         {
             return true;
         }
@@ -453,7 +454,7 @@ bool StringContainsVar(const char *s, const char *v)
 
 /*********************************************************************/
 
-int IsCf3VarString(const char *str)
+bool IsCf3VarString(const char *str)
 {
     char left = 'x', right = 'x';
     int dollar = false;
@@ -626,7 +627,7 @@ int DefinedVariable(char *name)
         return false;
     }
 
-    if (GetVariable("this", name, &rval) == cf_notype)
+    if (GetVariable("this", name, &rval) == DATA_TYPE_NONE)
     {
         return false;
     }
@@ -645,7 +646,7 @@ int BooleanControl(const char *scope, const char *name)
         return false;
     }
 
-    if (GetVariable(scope, name, &retval) != cf_notype)
+    if (GetVariable(scope, name, &retval) != DATA_TYPE_NONE)
     {
         return GetBoolean(retval.item);
     }
@@ -850,21 +851,21 @@ int IsCfList(char *type)
 
 /*******************************************************************/
 
-int AddVariableHash(const char *scope, const char *lval, Rval rval, enum cfdatatype dtype, const char *fname,
+int AddVariableHash(const char *scope, const char *lval, Rval rval, DataType dtype, const char *fname,
                     int lineno)
 {
     Scope *ptr;
     const Rlist *rp;
     CfAssoc *assoc;
 
-    if (rval.rtype == CF_SCALAR)
+    if (rval.type == RVAL_TYPE_SCALAR)
     {
         CfDebug("AddVariableHash(%s.%s=%s (%s) rtype=%c)\n", scope, lval, (const char *) rval.item, CF_DATATYPES[dtype],
-                rval.rtype);
+                rval.type);
     }
     else
     {
-        CfDebug("AddVariableHash(%s.%s=(list) (%s) rtype=%c)\n", scope, lval, CF_DATATYPES[dtype], rval.rtype);
+        CfDebug("AddVariableHash(%s.%s=(list) (%s) rtype=%c)\n", scope, lval, CF_DATATYPES[dtype], rval.type);
     }
 
     if (lval == NULL || scope == NULL)
@@ -889,9 +890,9 @@ int AddVariableHash(const char *scope, const char *lval, Rval rval, enum cfdatat
 
     if (strcmp(scope, "body") != 0)
     {
-        switch (rval.rtype)
+        switch (rval.type)
         {
-        case CF_SCALAR:
+        case RVAL_TYPE_SCALAR:
 
             if (StringContainsVar((char *) rval.item, lval))
             {
@@ -901,7 +902,7 @@ int AddVariableHash(const char *scope, const char *lval, Rval rval, enum cfdatat
             }
             break;
 
-        case CF_LIST:
+        case RVAL_TYPE_LIST:
 
             for (rp = rval.item; rp != NULL; rp = rp->next)
             {
@@ -913,6 +914,8 @@ int AddVariableHash(const char *scope, const char *lval, Rval rval, enum cfdatat
             }
             break;
 
+        default:
+            break;
         }
     }
 
@@ -939,8 +942,8 @@ int AddVariableHash(const char *scope, const char *lval, Rval rval, enum cfdatat
                       lval, CONTEXTID);
             }
 
-            DeleteRlist(scalarvars);
-            DeleteRlist(listvars);
+            RlistDestroy(scalarvars);
+            RlistDestroy(listvars);
         }
     }
 
@@ -955,7 +958,7 @@ int AddVariableHash(const char *scope, const char *lval, Rval rval, enum cfdatat
         else
         {
             /* Different value, bark and replace */
-            if (!UnresolvedVariables(assoc, rval.rtype))
+            if (!UnresolvedVariables(assoc, rval.type))
             {
                 CfOut(cf_inform, "", " !! Duplicate selection of value for variable \"%s\" in scope %s", lval, ptr->scope);
                 if (fname)
@@ -967,8 +970,8 @@ int AddVariableHash(const char *scope, const char *lval, Rval rval, enum cfdatat
                     CfOut(cf_inform, "", " !! in bundle parameterization\n");
                 }
             }
-            DeleteRvalItem(assoc->rval);
-            assoc->rval = CopyRvalItem(rval);
+            RvalDestroy(assoc->rval);
+            assoc->rval = RvalCopy(rval);
             assoc->dtype = dtype;
             CfDebug("Stored \"%s\" in context %s\n", lval, scope);
         }
@@ -1022,7 +1025,7 @@ void DeRefListsInHashtable(char *scope, Rlist *namelist, Rlist *dereflist)
             {
                 /* Link up temp hash to variable lol */
 
-                if (rp->state_ptr == NULL || rp->state_ptr->type == CF_FNCALL)
+                if (rp->state_ptr == NULL || rp->state_ptr->type == RVAL_TYPE_FNCALL)
                 {
                     /* Unexpanded function, or blank variable must be skipped. */
                     return;
@@ -1034,7 +1037,7 @@ void DeRefListsInHashtable(char *scope, Rlist *namelist, Rlist *dereflist)
                             (char *) rp->state_ptr->item);
 
                     // must first free existing rval in scope, then allocate new (should always be string)
-                    DeleteRvalItem(assoc->rval);
+                    RvalDestroy(assoc->rval);
 
                     // avoids double free - borrowing value from lol (freed in DeleteScope())
                     assoc->rval.item = xstrdup(rp->state_ptr->item);
@@ -1042,17 +1045,17 @@ void DeRefListsInHashtable(char *scope, Rlist *namelist, Rlist *dereflist)
 
                 switch (assoc->dtype)
                 {
-                case cf_slist:
-                    assoc->dtype = cf_str;
-                    assoc->rval.rtype = CF_SCALAR;
+                case DATA_TYPE_STRING_LIST:
+                    assoc->dtype = DATA_TYPE_STRING;
+                    assoc->rval.type = RVAL_TYPE_SCALAR;
                     break;
-                case cf_ilist:
-                    assoc->dtype = cf_int;
-                    assoc->rval.rtype = CF_SCALAR;
+                case DATA_TYPE_INT_LIST:
+                    assoc->dtype = DATA_TYPE_INT;
+                    assoc->rval.type = RVAL_TYPE_SCALAR;
                     break;
-                case cf_rlist:
-                    assoc->dtype = cf_real;
-                    assoc->rval.rtype = CF_SCALAR;
+                case DATA_TYPE_REAL_LIST:
+                    assoc->dtype = DATA_TYPE_REAL;
+                    assoc->rval.type = RVAL_TYPE_SCALAR;
                     break;
                 default:
                     /* Only lists need to be converted */

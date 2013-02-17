@@ -52,8 +52,20 @@
 #include "string_lib.h"
 #include "constraints.h"
 #include "files_lib.h"
+#include "rlist.h"
+
+#ifdef HAVE_NOVA
+#include "cf.nova.h"
+#endif
 
 #define CF_RECURSION_LIMIT 100
+
+static Rlist *AUTO_DEFINE_LIST;
+
+Item *VSETUIDLIST;
+
+Rlist *SINGLE_COPY_LIST = NULL;
+static Rlist *SINGLE_COPY_CACHE = NULL;
 
 static int TransformFile(char *file, Attributes attr, Promise *pp);
 static void VerifyName(char *path, struct stat *sb, Attributes attr, Promise *pp, const ReportContext *report_context);
@@ -93,6 +105,11 @@ static void LogFileChange(char *file, int change, Attributes a, Promise *pp, con
 }
 #endif
 
+void SetFileAutoDefineList(Rlist *auto_define_list)
+{
+    AUTO_DEFINE_LIST = auto_define_list;
+}
+
 int VerifyFileLeaf(char *path, struct stat *sb, Attributes attr, Promise *pp,
                    const ReportContext *report_context)
 {
@@ -109,7 +126,7 @@ int VerifyFileLeaf(char *path, struct stat *sb, Attributes attr, Promise *pp,
 /* We still need to augment the scope of context "this" for commands */
 
     DeleteScalar("this", "promiser");
-    NewScalar("this", "promiser", path, cf_str);        // Parameters may only be scalars
+    NewScalar("this", "promiser", path, DATA_TYPE_STRING);        // Parameters may only be scalars
 
     if (attr.transformer != NULL)
     {
@@ -195,7 +212,7 @@ static void CfCopyFile(char *sourcefile, char *destfile, struct stat ssb, Attrib
         return;
     }
 
-    if (IsInListOfRegex(SINGLE_COPY_CACHE, destfile))
+    if (RlistIsInListOfRegex(SINGLE_COPY_CACHE, destfile))
     {
         CfOut(cf_inform, "", " -> Skipping single-copied file %s\n", destfile);
         return;
@@ -331,12 +348,12 @@ static void CfCopyFile(char *sourcefile, char *destfile, struct stat ssb, Attrib
 
                 if (SINGLE_COPY_LIST)
                 {
-                    IdempPrependRScalar(&SINGLE_COPY_CACHE, destfile, CF_SCALAR);
+                    RlistPrependScalarIdemp(&SINGLE_COPY_CACHE, destfile, RVAL_TYPE_SCALAR);
                 }
 
                 if (MatchRlistItem(AUTO_DEFINE_LIST, destfile))
                 {
-                    FileAutoDefine(destfile, pp->namespace);
+                    FileAutoDefine(destfile, pp->ns);
                 }
             }
             else
@@ -452,7 +469,7 @@ static void CfCopyFile(char *sourcefile, char *destfile, struct stat ssb, Attrib
 
                 if (MatchRlistItem(AUTO_DEFINE_LIST, destfile))
                 {
-                    FileAutoDefine(destfile, pp->namespace);
+                    FileAutoDefine(destfile, pp->ns);
                 }
 
                 if (CopyRegularFile(sourcefile, destfile, ssb, dsb, attr, pp, report_context))
@@ -471,9 +488,9 @@ static void CfCopyFile(char *sourcefile, char *destfile, struct stat ssb, Attrib
                         VerifyCopiedFileAttributes(destfile, &dsb, &ssb, attr, pp, report_context);
                     }
 
-                    if (IsInListOfRegex(SINGLE_COPY_LIST, destfile))
+                    if (RlistIsInListOfRegex(SINGLE_COPY_LIST, destfile))
                     {
-                        IdempPrependRScalar(&SINGLE_COPY_CACHE, destfile, CF_SCALAR);
+                        RlistPrependScalarIdemp(&SINGLE_COPY_CACHE, destfile, RVAL_TYPE_SCALAR);
                     }
                 }
                 else
@@ -497,9 +514,9 @@ static void CfCopyFile(char *sourcefile, char *destfile, struct stat ssb, Attrib
                otherwise we can get oscillations between multipe versions if type
                is based on a checksum */
 
-            if (IsInListOfRegex(SINGLE_COPY_LIST, destfile))
+            if (RlistIsInListOfRegex(SINGLE_COPY_LIST, destfile))
             {
-                IdempPrependRScalar(&SINGLE_COPY_CACHE, destfile, CF_SCALAR);
+                RlistPrependScalarIdemp(&SINGLE_COPY_CACHE, destfile, RVAL_TYPE_SCALAR);
             }
 
             cfPS(cf_verbose, CF_NOP, "", pp, attr, " -> File %s is an up to date copy of source\n", destfile);
@@ -2613,7 +2630,7 @@ static void VerifyFileIntegrity(char *file, Attributes attr, Promise *pp, const 
 
     if (changed)
     {
-        NewPersistentContext(pp->namespace, "checksum_alerts", CF_PERSISTENCE, cfpreserve);
+        NewPersistentContext(pp->ns, "checksum_alerts", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
         LogHashChange(file, cf_file_content_changed, "Content changed", pp);
     }
 
@@ -2708,13 +2725,13 @@ static int CompareForFileCopy(char *sourcefile, char *destfile, struct stat *ssb
     return false;
 }
 
-static void FileAutoDefine(char *destfile, const char *namespace)
+static void FileAutoDefine(char *destfile, const char *ns)
 {
-    char class[CF_MAXVARSIZE];
+    char context[CF_MAXVARSIZE];
 
-    snprintf(class, CF_MAXVARSIZE, "auto_%s", CanonifyName(destfile));
-    NewClass(class,  namespace);
-    CfOut(cf_inform, "", "Auto defining class %s\n", class);
+    snprintf(context, CF_MAXVARSIZE, "auto_%s", CanonifyName(destfile));
+    NewClass(context,  ns);
+    CfOut(cf_inform, "", "Auto defining class %s\n", context);
 }
 
 #ifndef __MINGW32__
@@ -3285,11 +3302,6 @@ static void VerifyFileChanges(char *file, struct stat *sb, Attributes attr, Prom
         return;
     }
 
-    if (EXCLAIM)
-    {
-        CfOut(cf_error, "", "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    }
-
     if (cmpsb.st_mode != sb->st_mode)
     {
         snprintf(message, CF_BUFSIZE - 1, "ALERT: Permissions for %s changed %jo -> %jo", file,
@@ -3358,11 +3370,6 @@ static void VerifyFileChanges(char *file, struct stat *sb, Attributes attr, Prom
         CfOut(cf_error, "", "Preceding promise: %s", pp->ref);
     }
 
-    if (EXCLAIM)
-    {
-        CfOut(cf_error, "", "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    }
-
     if (attr.change.update && !DONTDO)
     {
         DeleteDB(dbp, file);
@@ -3415,7 +3422,7 @@ int CfCreateFile(char *file, Promise *pp, Attributes attr,
             mode_t saveumask = umask(0);
             mode_t filemode = 0600;     /* Decide the mode for filecreation */
 
-            if (GetConstraintValue("mode", pp, CF_SCALAR) == NULL)
+            if (GetConstraintValue("mode", pp, RVAL_TYPE_SCALAR) == NULL)
             {
                 /* Relying on umask is risky */
                 filemode = 0600;

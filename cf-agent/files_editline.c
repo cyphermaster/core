@@ -43,6 +43,7 @@
 #include "string_lib.h"
 #include "logging.h"
 #include "misc_lib.h"
+#include "rlist.h"
 
 /*****************************************************************************/
 
@@ -105,7 +106,6 @@ int ScheduleEditLineOperations(char *filename, Bundle *bp, Attributes a, Promise
 {
     enum editlinetypesequence type;
     SubType *sp;
-    Promise *pp;
     char lockname[CF_BUFSIZE];
     const char *bp_stack = THIS_BUNDLE;
     CfLock thislock;
@@ -120,19 +120,20 @@ int ScheduleEditLineOperations(char *filename, Bundle *bp, Attributes a, Promise
     }
 
     NewScope("edit");
-    NewScalar("edit", "filename", filename, cf_str);
+    NewScalar("edit", "filename", filename, DATA_TYPE_STRING);
 
 /* Reset the done state for every call here, since bundle is reusable */
 
     for (type = 0; EDITLINETYPESEQUENCE[type] != NULL; type++)
     {
-        if ((sp = GetSubTypeForBundle(EDITLINETYPESEQUENCE[type], bp)) == NULL)
+        if ((sp = BundleGetSubType(bp, EDITLINETYPESEQUENCE[type])) == NULL)
         {
             continue;
         }
 
-        for (pp = sp->promiselist; pp != NULL; pp = pp->next)
+        for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
         {
+            Promise *pp = SeqAt(sp->promises, ppi);
             pp->donep = false;
         }
     }
@@ -143,7 +144,7 @@ int ScheduleEditLineOperations(char *filename, Bundle *bp, Attributes a, Promise
         {
             EditClassBanner(type);
 
-            if ((sp = GetSubTypeForBundle(EDITLINETYPESEQUENCE[type], bp)) == NULL)
+            if ((sp = BundleGetSubType(bp, EDITLINETYPESEQUENCE[type])) == NULL)
             {
                 continue;
             }
@@ -152,8 +153,10 @@ int ScheduleEditLineOperations(char *filename, Bundle *bp, Attributes a, Promise
             THIS_BUNDLE = bp->name;
             SetScope(bp->name);
 
-            for (pp = sp->promiselist; pp != NULL; pp = pp->next)
+            for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
             {
+                Promise *pp = SeqAt(sp->promises, ppi);
+
                 pp->edcontext = parentp->edcontext;
                 pp->this_server = filename;
                 pp->donep = &(pp->done);
@@ -198,7 +201,7 @@ Bundle *MakeTemporaryBundleFromTemplate(Attributes a, Promise *pp)
     bp->type = xstrdup("edit_line");
     bp->args = NULL;
 
-    tp = AppendSubType(bp, "insert_lines");
+    tp = BundleAppendSubType(bp, "insert_lines");
 
 // Now parse the template file
 
@@ -213,7 +216,10 @@ Bundle *MakeTemporaryBundleFromTemplate(Attributes a, Promise *pp)
         buffer[0] = '\0';
         if (fgets(buffer, CF_BUFSIZE, fp) == NULL)
         {
-            UnexpectedError("Failed to read line from stream");
+            if (strlen(buffer))
+            {
+                UnexpectedError("Failed to read line from stream");
+            }
         }
         lineno++;
    
@@ -279,8 +285,8 @@ Bundle *MakeTemporaryBundleFromTemplate(Attributes a, Promise *pp)
 
             *(sp-1) = '\0'; // StripTrailingNewline(promiser) and terminate
 
-            np = AppendPromise(tp, promiser, (Rval) { NULL, CF_NOPROMISEE }, context, bundlename, "edit_line", pp->namespace);
-            ConstraintAppendToPromise(np, "insert_type", (Rval) { xstrdup("preserve_block"), CF_SCALAR }, "any", false);
+            np = SubTypeAppendPromise(tp, promiser, (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, context);
+            PromiseAppendConstraint(np, "insert_type", (Rval) { xstrdup("preserve_block"), RVAL_TYPE_SCALAR }, "any", false);
 
             DeleteItemList(lines);
             free(promiser);
@@ -299,8 +305,8 @@ Bundle *MakeTemporaryBundleFromTemplate(Attributes a, Promise *pp)
                 {
                     CfOut(cf_error, "", "StripTrailingNewline was called on an overlong string");
                 }
-                np = AppendPromise(tp, buffer, (Rval) { NULL, CF_NOPROMISEE }, context, bundlename, "edit_line", pp->namespace);
-                ConstraintAppendToPromise(np, "insert_type", (Rval) { xstrdup("preserve_block"), CF_SCALAR }, "any", false);
+                np = SubTypeAppendPromise(tp, buffer, (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, context);
+                PromiseAppendConstraint(np, "insert_type", (Rval) { xstrdup("preserve_block"), RVAL_TYPE_SCALAR }, "any", false);
             }
         }
     }
@@ -338,7 +344,7 @@ static void KeepEditLinePromise(Promise *pp)
 {
     char *sp = NULL;
 
-    if (!IsDefinedClass(pp->classes, pp->namespace))
+    if (!IsDefinedClass(pp->classes, pp->ns))
     {
         CfOut(cf_verbose, "", "\n");
         CfOut(cf_verbose, "", "   .  .  .  .  .  .  .  .  .  .  .  .  .  .  . \n");
@@ -1125,7 +1131,7 @@ static int EditColumns(Item *file_start, Item *file_end, Attributes a, Promise *
         strncpy(separator, ip->name + s, e - s);
         separator[e - s] = '\0';
 
-        columns = SplitRegexAsRList(ip->name, a.column.column_separator, CF_INFINITY, a.column.blanks_ok);
+        columns = RlistFromSplitRegex(ip->name, a.column.column_separator, CF_INFINITY, a.column.blanks_ok);
         retval = EditLineByColumn(&columns, a, pp);
 
         if (retval)
@@ -1134,7 +1140,7 @@ static int EditColumns(Item *file_start, Item *file_end, Attributes a, Promise *
             ip->name = Rlist2String(columns, separator);
         }
 
-        DeleteRlist(columns);
+        RlistDestroy(columns);
     }
 
     return retval;
@@ -1267,7 +1273,10 @@ static int InsertFileAtLocation(Item **start, Item *begin_ptr, Item *end_ptr, It
         buf[0] = '\0';
         if (fgets(buf, CF_BUFSIZE, fin) == NULL)
         {
-            UnexpectedError("Failed to read line from stream");
+            if (strlen(buf))
+            {
+                UnexpectedError("Failed to read line from stream");
+            }
         }
         if (StripTrailingNewline(buf, CF_EXPANDSIZE) == -1)
         {
@@ -1549,7 +1558,7 @@ static int EditLineByColumn(Rlist **columns, Attributes a, Promise *pp)
         {
             for (i = 0; i < (a.column.select_column - count); i++)
             {
-                AppendRScalar(columns, xstrdup(""), CF_SCALAR);
+                RlistAppendScalar(columns, xstrdup(""), RVAL_TYPE_SCALAR);
             }
 
             count = 0;
@@ -1576,7 +1585,7 @@ static int EditLineByColumn(Rlist **columns, Attributes a, Promise *pp)
         }
         else
         {
-            this_column = SplitStringAsRList(rp->item, a.column.value_separator);
+            this_column = RlistFromSplitString(rp->item, a.column.value_separator);
             retval = DoEditColumn(&this_column, a, pp);
         }
 
@@ -1603,7 +1612,7 @@ static int EditLineByColumn(Rlist **columns, Attributes a, Promise *pp)
             cfPS(cf_verbose, CF_NOP, "", pp, a, " -> No need to edit field in %s", pp->this_server);
         }
 
-        DeleteRlist(this_column);
+        RlistDestroy(this_column);
         return retval;
     }
     else
@@ -1615,13 +1624,13 @@ static int EditLineByColumn(Rlist **columns, Attributes a, Promise *pp)
             if (a.transaction.action == cfa_warn)
             {
                 cfPS(cf_error, CF_WARN, "", pp, a,
-                     " -> Need to delete field field value %s in %s but only a warning was promised", ScalarValue(rp),
+                     " -> Need to delete field field value %s in %s but only a warning was promised", RlistScalarValue(rp),
                      pp->this_server);
                 return false;
             }
             else
             {
-                cfPS(cf_inform, CF_CHG, "", pp, a, " -> Deleting column field value %s in %s", ScalarValue(rp),
+                cfPS(cf_inform, CF_CHG, "", pp, a, " -> Deleting column field value %s in %s", RlistScalarValue(rp),
                      pp->this_server);
                 (pp->edcontext->num_edits)++;
                 free(rp->item);
@@ -1635,13 +1644,13 @@ static int EditLineByColumn(Rlist **columns, Attributes a, Promise *pp)
             {
                 cfPS(cf_error, CF_WARN, "", pp, a,
                      " -> Need to set column field value %s to %s in %s but only a warning was promised",
-                     ScalarValue(rp), a.column.column_value, pp->this_server);
+                     RlistScalarValue(rp), a.column.column_value, pp->this_server);
                 return false;
             }
             else
             {
                 cfPS(cf_inform, CF_CHG, "", pp, a, " -> Setting whole column field value %s to %s in %s",
-                     ScalarValue(rp), a.column.column_value, pp->this_server);
+                     RlistScalarValue(rp), a.column.column_value, pp->this_server);
                 free(rp->item);
                 rp->item = xstrdup(a.column.column_value);
                 (pp->edcontext->num_edits)++;
@@ -1768,11 +1777,11 @@ static int DoEditColumn(Rlist **columns, Attributes a, Promise *pp)
 
     if (a.column.column_operation && strcmp(a.column.column_operation, "delete") == 0)
     {
-        if ((found = KeyInRlist(*columns, a.column.column_value)))
+        if ((found = RlistKeyIn(*columns, a.column.column_value)))
         {
             CfOut(cf_inform, "", " -> Deleting column field sub-value %s in %s", a.column.column_value,
                   pp->this_server);
-            DeleteRlistEntry(columns, found);
+            RlistDestroyEntry(columns, found);
             return true;
         }
         else
@@ -1793,16 +1802,16 @@ static int DoEditColumn(Rlist **columns, Attributes a, Promise *pp)
         }
 
         CfOut(cf_inform, "", " -> Setting field sub-value %s in %s", a.column.column_value, pp->this_server);
-        DeleteRlist(*columns);
+        RlistDestroy(*columns);
         *columns = NULL;
-        IdempPrependRScalar(columns, a.column.column_value, CF_SCALAR);
+        RlistPrependScalarIdemp(columns, a.column.column_value, RVAL_TYPE_SCALAR);
 
         return true;
     }
 
     if (a.column.column_operation && strcmp(a.column.column_operation, "prepend") == 0)
     {
-        if (IdempPrependRScalar(columns, a.column.column_value, CF_SCALAR))
+        if (RlistPrependScalarIdemp(columns, a.column.column_value, RVAL_TYPE_SCALAR))
         {
             CfOut(cf_inform, "", " -> Prepending field sub-value %s in %s", a.column.column_value, pp->this_server);
             return true;
@@ -1815,7 +1824,7 @@ static int DoEditColumn(Rlist **columns, Attributes a, Promise *pp)
 
     if (a.column.column_operation && strcmp(a.column.column_operation, "alphanum") == 0)
     {
-        if (IdempPrependRScalar(columns, a.column.column_value, CF_SCALAR))
+        if (RlistPrependScalarIdemp(columns, a.column.column_value, RVAL_TYPE_SCALAR))
         {
             retval = true;
         }
@@ -1827,7 +1836,7 @@ static int DoEditColumn(Rlist **columns, Attributes a, Promise *pp)
 
 /* default operation is append */
 
-    if (IdempAppendRScalar(columns, a.column.column_value, CF_SCALAR))
+    if (RlistAppendScalarIdemp(columns, a.column.column_value, RVAL_TYPE_SCALAR))
     {
         return true;
     }
