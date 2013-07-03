@@ -10,8 +10,6 @@ body common control
   inputs => { "../../default.cf.sub" };
   bundlesequence  => { default("$(this.promise_filename)") };
   version => "1.0";
-nova_edition::
-  host_licenses_paid => "5";
 }
 
 bundle common g
@@ -23,7 +21,7 @@ vars:
         "source" string => "/etc/group";
         "source_command" string => 'printf "%d", (stat("$(g.source)"))[1]';
         "source_ino" string => execresult(
-            "/usr/bin/perl -le '$(g.source_command)'",
+            "$(G.perl) -le '$(g.source_command)'",
             "noshell");
 }
 
@@ -64,7 +62,7 @@ bundle agent check
 {
 vars:
         "result" string => execresult(
-            "/usr/bin/perl -le '$(g.command)'",
+            "$(G.perl) -le '$(g.command)'",
             "noshell");
 
 classes:

@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -27,18 +27,25 @@
 
 #include "env_context.h"
 #include "env_monitor.h"
-#include "constraints.h"
 #include "conversion.h"
-#include "reporting.h"
 #include "vars.h"
-#include "cfstream.h"
 #include "signals.h"
+#include "scope.h"
+#include "sysinfo.h"
+#include "man.h"
 
-/*****************************************************************************/
+typedef enum
+{
+    MONITOR_CONTROL_FORGET_RATE,
+    MONITOR_CONTROL_MONITOR_FACILITY,
+    MONITOR_CONTROL_HISTOGRAMS,
+    MONITOR_CONTROL_TCP_DUMP,
+    MONITOR_CONTROL_NONE
+} MonitorControl;
 
-static void ThisAgentInit(void);
+static void ThisAgentInit(EvalContext *ctx);
 static GenericAgentConfig *CheckOpts(int argc, char **argv);
-static void KeepPromises(Policy *policy, const ReportContext *report_context);
+static void KeepPromises(EvalContext *ctx, Policy *policy);
 
 /*****************************************************************************/
 /* Globals                                                                   */
@@ -46,19 +53,20 @@ static void KeepPromises(Policy *policy, const ReportContext *report_context);
 
 extern int NO_FORK;
 
-extern const BodySyntax CFM_CONTROLBODY[];
+extern const ConstraintSyntax CFM_CONTROLBODY[];
 
 /*******************************************************************/
 /* Command line options                                            */
 /*******************************************************************/
 
-static const char *ID = "The monitoring agent is a machine-learning, sampling\n"
-    "daemon which learns the normal state of the current\n"
-    "host and classifies new observations in terms of the\n"
-    "patterns formed by previous ones. The data are made\n"
-    "available to and read by cf-agent for classification\n" "of responses to anomalous states.";
+static const char *CF_MONITORD_SHORT_DESCRIPTION = "monitoring daemon for CFEngine";
 
-static const struct option OPTIONS[14] =
+static const char *CF_MONITORD_MANPAGE_LONG_DESCRIPTION =
+        "cf-monitord is the monitoring daemon for CFEngine. It samples probes defined in policy code and attempts to learn the "
+        "normal system state based on current and past observations. Current estimates are made available as "
+        "special variables (e.g. $(mon.av_cpu)) to cf-agent, which may use them to inform policy decisions.";
+
+static const struct option OPTIONS[] =
 {
     {"help", no_argument, 0, 'h'},
     {"debug", no_argument, 0, 'd'},
@@ -72,10 +80,12 @@ static const struct option OPTIONS[14] =
     {"no-fork", no_argument, 0, 'F'},
     {"histograms", no_argument, 0, 'H'},
     {"tcpdump", no_argument, 0, 'T'},
+    {"legacy-output", no_argument, 0, 'l'},
+    {"color", optional_argument, 0, 'C'},
     {NULL, 0, 0, '\0'}
 };
 
-static const char *HINTS[14] =
+static const char *HINTS[] =
 {
     "Print the help message",
     "Enable debugging output",
@@ -89,6 +99,8 @@ static const char *HINTS[14] =
     "Run process in foreground, not as a daemon",
     "Ignored for backward compatibility",
     "Interface with tcpdump if available to collect data about network",
+    "Use legacy output format",
+    "Enable colorized output. Possible values: 'always', 'auto', 'never'. If option is used, the default value is 'auto'",
     NULL
 };
 
@@ -96,21 +108,23 @@ static const char *HINTS[14] =
 
 int main(int argc, char *argv[])
 {
+    EvalContext *ctx = EvalContextNew();
+
     GenericAgentConfig *config = CheckOpts(argc, argv);
+    GenericAgentConfigApply(ctx, config);
 
-    ReportContext *report_context = OpenReports(config->agent_type);
-    GenericAgentDiscoverContext(config, report_context);
-    Policy *policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+    GenericAgentDiscoverContext(ctx, config);
+    Policy *policy = GenericAgentLoadPolicy(ctx, config);
 
-    CheckLicenses();
+    CheckForPolicyHub(ctx);
 
-    ThisAgentInit();
-    KeepPromises(policy, report_context);
+    ThisAgentInit(ctx);
+    KeepPromises(ctx, policy);
 
-    MonitorStartServer(policy, report_context);
+    MonitorStartServer(ctx, policy);
 
-    ReportContextDestroy(report_context);
     GenericAgentConfigDestroy(config);
+    EvalContextDestroy(ctx);
     return 0;
 }
 
@@ -123,18 +137,21 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
     int c;
     GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_MONITOR);
 
-    while ((c = getopt_long(argc, argv, "dvnIf:VSxHTKMFh", OPTIONS, &optindex)) != EOF)
+    while ((c = getopt_long(argc, argv, "dvnIf:VSxHTKMFhlC::", OPTIONS, &optindex)) != EOF)
     {
         switch ((char) c)
         {
+        case 'l':
+            LEGACY_OUTPUT = true;
+            break;
+
         case 'f':
-            GenericAgentConfigSetInputFile(config, optarg);
+            GenericAgentConfigSetInputFile(config, GetWorkDir(), optarg);
             MINUSF = true;
             break;
 
         case 'd':
-            HardClass("opt_debug");
-            DEBUG = true;
+            LogSetGlobalLevel(LOG_LEVEL_DEBUG);
             NO_FORK = true;
             break;
 
@@ -143,11 +160,11 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'I':
-            INFORM = true;
+            LogSetGlobalLevel(LOG_LEVEL_INFO);
             break;
 
         case 'v':
-            VERBOSE = true;
+            LogSetGlobalLevel(LOG_LEVEL_VERBOSE);
             NO_FORK = true;
             break;
 
@@ -163,35 +180,54 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'V':
-            PrintVersionBanner("cf-monitord");
+            PrintVersion();
             exit(0);
 
         case 'h':
-            Syntax("cf-monitord - cfengine's monitoring agent", OPTIONS, HINTS, ID);
+            PrintHelp("cf-monitord", OPTIONS, HINTS, true);
             exit(0);
 
         case 'M':
-            ManPage("cf-monitord - cfengine's monitoring agent", OPTIONS, HINTS, ID);
-            exit(0);
+            {
+                Writer *out = FileWriter(stdout);
+                ManPageWrite(out, "cf-monitord", time(NULL),
+                             CF_MONITORD_SHORT_DESCRIPTION,
+                             CF_MONITORD_MANPAGE_LONG_DESCRIPTION,
+                             OPTIONS, HINTS,
+                             true);
+                FileWriterDetach(out);
+                exit(EXIT_SUCCESS);
+            }
 
         case 'x':
-            CfOut(cf_error, "", "Self-diagnostic functionality is retired.");
+            Log(LOG_LEVEL_ERR, "Self-diagnostic functionality is retired.");
             exit(0);
 
+        case 'C':
+            if (!GenericAgentConfigParseColor(config, optarg))
+            {
+                exit(EXIT_FAILURE);
+            }
+            break;
+
         default:
-            Syntax("cf-monitord - cfengine's monitoring agent", OPTIONS, HINTS, ID);
+            PrintHelp("cf-monitord", OPTIONS, HINTS, true);
             exit(1);
         }
     }
 
-    CfDebug("Set debugging\n");
+    if (!GenericAgentConfigParseArguments(config, argc - optind, argv + optind))
+    {
+        Log(LOG_LEVEL_ERR, "Too many arguments");
+        exit(EXIT_FAILURE);
+    }
 
     return config;
 }
 
 /*****************************************************************************/
 
-static void KeepPromises(Policy *policy, const ReportContext *report_context)
+static void KeepPromises(EvalContext *ctx, Policy *policy)
 {
     Rval retval;
 
@@ -202,31 +238,31 @@ static void KeepPromises(Policy *policy, const ReportContext *report_context)
         {
             Constraint *cp = SeqAt(constraints, i);
 
-            if (IsExcluded(cp->classes, NULL))
+            if (!IsDefinedClass(ctx, cp->classes, NULL))
             {
                 continue;
             }
 
-            if (GetVariable("control_monitor", cp->lval, &retval) == DATA_TYPE_NONE)
+            if (!EvalContextVariableGet(ctx, (VarRef) { NULL, "control_monitor", cp->lval }, &retval, NULL))
             {
-                CfOut(cf_error, "", "Unknown lval %s in monitor control body", cp->lval);
+                Log(LOG_LEVEL_ERR, "Unknown lval '%s' in monitor control body", cp->lval);
                 continue;
             }
 
-            if (strcmp(cp->lval, CFM_CONTROLBODY[cfm_histograms].lval) == 0)
+            if (strcmp(cp->lval, CFM_CONTROLBODY[MONITOR_CONTROL_HISTOGRAMS].lval) == 0)
             {
                 /* Keep accepting this option for backward compatibility. */
             }
 
-            if (strcmp(cp->lval, CFM_CONTROLBODY[cfm_tcpdump].lval) == 0)
+            if (strcmp(cp->lval, CFM_CONTROLBODY[MONITOR_CONTROL_TCP_DUMP].lval) == 0)
             {
-                MonNetworkSnifferEnable(GetBoolean(retval.item));
+                MonNetworkSnifferEnable(BooleanFromString(retval.item));
             }
 
-            if (strcmp(cp->lval, CFM_CONTROLBODY[cfm_forgetrate].lval) == 0)
+            if (strcmp(cp->lval, CFM_CONTROLBODY[MONITOR_CONTROL_FORGET_RATE].lval) == 0)
             {
                 sscanf(retval.item, "%lf", &FORGETRATE);
-                CfDebug("forget rate = %f\n", FORGETRATE);
+                Log(LOG_LEVEL_DEBUG, "forget rate %f", FORGETRATE);
             }
         }
     }
@@ -236,12 +272,12 @@ static void KeepPromises(Policy *policy, const ReportContext *report_context)
 /* Level 1                                                                   */
 /*****************************************************************************/
 
-static void ThisAgentInit(void)
+static void ThisAgentInit(EvalContext *ctx)
 {
     umask(077);
     sprintf(VPREFIX, "cf-monitord");
 
-    SetReferenceTime(false);
+    SetReferenceTime(ctx, false);
     SetStartTime();
 
     signal(SIGINT, HandleSignalsForDaemon);

@@ -1,76 +1,52 @@
-/* 
-   Copyright (C) Cfengine AS
+/*
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
    Free Software Foundation; version 3.
-   
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
-  You should have received a copy of the GNU General Public License  
+
+  You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
-#include "cf3.defs.h"
+#include "item_lib.h"
 
 #include "files_names.h"
 #include "addr_lib.h"
-#include "item_lib.h"
 #include "matching.h"
-#include "logging.h"
 #include "misc_lib.h"
 
 /*******************************************************************/
-
-int PrintItemList(char *buffer, int bufsize, const Item *list)
+void PrintItemList(const Item *list, Writer *w)
 {
-    StartJoin(buffer, "{", bufsize);
+    WriterWriteChar(w, '{');
 
     for (const Item *ip = list; ip != NULL; ip = ip->next)
     {
-        if (!JoinSilent(buffer, "'", bufsize))
+        if (ip != list)
         {
-            EndJoin(buffer, "'}", bufsize);
-            return false;
+            WriterWriteChar(w, ',');
         }
 
-        if (!Join(buffer,ip->name,bufsize))
-        {
-            EndJoin(buffer, "'}", bufsize);
-            return false;
-        }
-
-        if (!JoinSilent(buffer, "'", bufsize))
-        {
-            EndJoin(buffer, "'}", bufsize);
-            return false;
-        }
-
-        if (ip->next != NULL)
-        {
-            if (!JoinSilent(buffer, ",", bufsize))
-            {
-                EndJoin(buffer, "}", bufsize);
-                return false;
-            }
-        }
+        WriterWriteChar(w, '\'');
+        WriterWrite(w, ip->name);
+        WriterWriteChar(w, '\'');
     }
 
-    EndJoin(buffer, "}", bufsize);
-
-    return true;
+    WriterWriteChar(w, '}');
 }
 
 /*********************************************************************/
@@ -177,6 +153,27 @@ bool IsItemIn(const Item *list, const char *item)
 
 /*********************************************************************/
 
+bool ListsCompare(const Item *list1, const Item *list2)
+{
+    if (ListLen(list1) != ListLen(list2))
+    {
+        return false;
+    }
+
+    for (const Item *ptr = list1; ptr != NULL; ptr = ptr->next)
+    {
+        if (IsItemIn(list2, ptr->name) == false)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+/*********************************************************************/
+
 Item *EndOfList(Item *start)
 {
     Item *ip, *prev = CF_UNDEFINED_ITEM;
@@ -191,11 +188,11 @@ Item *EndOfList(Item *start)
 
 /*********************************************************************/
 
-int IsItemInRegion(const char *item, const Item *begin_ptr, const Item *end_ptr, Attributes a, const Promise *pp)
+int IsItemInRegion(const char *item, const Item *begin_ptr, const Item *end_ptr, Rlist *insert_match, const Promise *pp)
 {
     for (const Item *ip = begin_ptr; ((ip != end_ptr) && (ip != NULL)); ip = ip->next)
     {
-        if (MatchPolicy(item, ip->name, a, pp))
+        if (MatchPolicy(item, ip->name, insert_match, pp))
         {
             return true;
         }
@@ -340,8 +337,6 @@ void PrependItemList(Item **liststart, const char *itemstring)
 int ListLen(const Item *list)
 {
     int count = 0;
-
-    CfDebug("Check ListLen\n");
 
     for (const Item *ip = list; ip != NULL; ip = ip->next)
     {
@@ -501,7 +496,7 @@ int SelectLastItemMatching(const char *regexp, Item *begin, Item *end, Item **ma
 
 /*********************************************************************/
 
-int MatchRegion(const char *chunk, const Item *start, const Item *begin, const Item *end)
+int MatchRegion(const char *chunk, const Item *begin, const Item *end, bool regex)
 /*
   Match a region in between the selection delimiters. It is
   called after SelectRegion. The end delimiter will be visible
@@ -523,7 +518,11 @@ int MatchRegion(const char *chunk, const Item *start, const Item *begin, const I
             return false;
         }
 
-        if (!FullTextMatch(buf, ip->name))
+        if (!regex && strcmp(buf, ip->name) != 0)
+        {
+            return false;
+        }
+        if (regex && !FullTextMatch(buf, ip->name))
         {
             return false;
         }
@@ -587,18 +586,18 @@ void InsertAfter(Item **filestart, Item *ptr, const char *string)
 
 /*********************************************************************/
 
-int NeighbourItemMatches(const Item *file_start, const Item *location, const char *string, enum cfeditorder pos, Attributes a,
+int NeighbourItemMatches(const Item *file_start, const Item *location, const char *string, EditOrder pos, Rlist *insert_match,
                          const Promise *pp)
 {
 /* Look for a line matching proposed insert before or after location */
 
     for (const Item *ip = file_start; ip != NULL; ip = ip->next)
     {
-        if (pos == cfe_before)
+        if (pos == EDIT_ORDER_BEFORE)
         {
             if ((ip->next) && (ip->next == location))
             {
-                if (MatchPolicy(string, ip->name, a, pp))
+                if (MatchPolicy(string, ip->name, insert_match, pp))
                 {
                     return true;
                 }
@@ -609,11 +608,11 @@ int NeighbourItemMatches(const Item *file_start, const Item *location, const cha
             }
         }
 
-        if (pos == cfe_after)
+        if (pos == EDIT_ORDER_AFTER)
         {
             if (ip == location)
             {
-                if ((ip->next) && (MatchPolicy(string, ip->next->name, a, pp)))
+                if ((ip->next) && (MatchPolicy(string, ip->next->name, insert_match, pp)))
                 {
                     return true;
                 }
@@ -638,8 +637,6 @@ Item *SplitString(const char *string, char sep)
     const char *sp;
     char before[CF_BUFSIZE];
     int i = 0;
-
-    CfDebug("SplitString([%s],%c=%d)\n", string, sep, sep);
 
     for (sp = string; (*sp != '\0'); sp++, i++)
     {
@@ -684,8 +681,6 @@ Item *SplitStringAsItemList(const char *string, char sep)
     Item *liststart = NULL;
     char format[9];
     char node[CF_MAXVARSIZE];
-
-    CfDebug("SplitStringAsItemList(%s,%c)\n", string, sep);
 
     sprintf(format, "%%255[^%c]", sep); /* set format string to search */
 

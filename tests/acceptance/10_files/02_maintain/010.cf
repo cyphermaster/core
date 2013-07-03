@@ -9,8 +9,6 @@ body common control
   inputs => { "../../default.cf.sub" };
   bundlesequence  => { default("$(this.promise_filename)") };
   version => "1.0";
-nova_edition::
-  host_licenses_paid => "5";
 }
 
 bundle common g
@@ -83,7 +81,7 @@ vars:
         "expect" string => "1";
 
         "result" string => execresult(
-            "/usr/bin/perl -le '$(g.type_command)'", "noshell");
+            "$(G.perl) -le '$(g.type_command)'", "noshell");
 classes:
         "ok" expression => strcmp("$(expect)", "$(result)");
 

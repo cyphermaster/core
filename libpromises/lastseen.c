@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -26,9 +26,9 @@
 
 #include "lastseen.h"
 #include "conversion.h"
-#include "cfstream.h"
 #include "files_hashes.h"
-#include "transaction.h"
+#include "locks.h"
+#include "item_lib.h"
 
 void UpdateLastSawHost(const char *hostkey, const char *address,
                        bool incoming, time_t timestamp);
@@ -70,24 +70,19 @@ void UpdateLastSawHost(const char *hostkey, const char *address,
 
 /*****************************************************************************/
 
-void LastSaw(char *ipaddress, unsigned char digest[EVP_MAX_MD_SIZE + 1], LastSeenRole role)
+void LastSaw(const char *ipaddress, unsigned char digest[EVP_MAX_MD_SIZE + 1], LastSeenRole role)
 {
-    char databuf[CF_BUFSIZE];
-    char *mapip;
+    char databuf[EVP_MAX_MD_SIZE * 4];
 
     if (strlen(ipaddress) == 0)
     {
-        CfOut(cf_inform, "", "LastSeen registry for empty IP with role %d", role);
+        Log(LOG_LEVEL_INFO, "LastSeen registry for empty IP with role %d", role);
         return;
     }
 
-    ThreadLock(cft_output);
+    HashPrintSafe(CF_DEFAULT_DIGEST, digest, databuf);
 
-    strlcpy(databuf, HashPrint(CF_DEFAULT_DIGEST, digest), CF_BUFSIZE);
-
-    ThreadUnlock(cft_output);
-
-    mapip = MapAddress(ipaddress);
+    const char *mapip = MapAddress(ipaddress);
 
     UpdateLastSawHost(databuf, mapip, role == LAST_SEEN_ROLE_ACCEPT, time(NULL));
 }
@@ -100,7 +95,7 @@ void UpdateLastSawHost(const char *hostkey, const char *address,
     DBHandle *db = NULL;
     if (!OpenDB(&db, dbid_lastseen))
     {
-        CfOut(cf_error, "", " !! Unable to open last seen db");
+        Log(LOG_LEVEL_ERR, "Unable to open last seen db");
         return;
     }
 
@@ -139,52 +134,6 @@ void UpdateLastSawHost(const char *hostkey, const char *address,
 
     CloseDB(db);
 }
-
-/*****************************************************************************/
-
-bool RemoveHostFromLastSeen(const char *hostkey)
-{
-    DBHandle *db;
-    if (!OpenDB(&db, dbid_lastseen))
-    {
-        CfOut(cf_error, "", "Unable to open lastseen database");
-        return false;
-    }
-
-    /* Lookup corresponding address entry */
-
-    char hostkey_key[CF_BUFSIZE];
-    snprintf(hostkey_key, CF_BUFSIZE, "k%s", hostkey);
-    char address[CF_BUFSIZE];
-
-    if (ReadDB(db, hostkey_key, &address, sizeof(address)) == true)
-    {
-        /* Remove address entry */
-        char address_key[CF_BUFSIZE];
-        snprintf(address_key, CF_BUFSIZE, "a%s", address);
-
-        DeleteDB(db, address_key);
-    }
-
-    /* Remove quality-of-connection entries */
-
-    char quality_key[CF_BUFSIZE];
-
-    snprintf(quality_key, CF_BUFSIZE, "qi%s", hostkey);
-    DeleteDB(db, quality_key);
-
-    snprintf(quality_key, CF_BUFSIZE, "qo%s", hostkey);
-    DeleteDB(db, quality_key);
-
-    /* Remove main entry */
-
-    DeleteDB(db, hostkey_key);
-
-    CloseDB(db);
-
-    return true;
-}
-
 /*****************************************************************************/
 
 static bool Address2HostkeyInDB(DBHandle *db, const char *address, char *result)
@@ -235,7 +184,7 @@ bool Address2Hostkey(const char *address, char *result)
         {
             unsigned char digest[EVP_MAX_MD_SIZE + 1];
             HashPubKey(PUBKEY, digest, CF_DEFAULT_DIGEST);
-            snprintf(result, CF_MAXVARSIZE, "%s", HashPrint(CF_DEFAULT_DIGEST, digest));
+            HashPrintSafe(CF_DEFAULT_DIGEST, digest, result);
             return true;
         }
         else
@@ -254,23 +203,53 @@ bool Address2Hostkey(const char *address, char *result)
     CloseDB(db);
     return ret;
 }
+/**
+ * @brief detects whether input is a host/ip name or a key digest
+ *
+ * @param[in] key digest (SHA/MD5 format) or free host name string
+ *            (character '=' is optional but recommended)
+ * @retval true if a key digest, false otherwise
+ */
+static bool IsDigestOrHost(const char *input)
+{
+    if (strncmp(input, "SHA=", 3) == 0)
+    {
+        return true;
+    }
+    else if (strncmp(input, "MD5=", 3) == 0)
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
 
-/*****************************************************************************/
-
-bool ScanLastSeenQuality(LastSeenQualityCallback callback, void *ctx)
+/**
+ * @brief check whether the lastseen DB is coherent or not
+ * 
+ * A DB is coherent mainly if all the entries are valid and if there is
+ * a strict one-to-one correspondance between hosts and key digests
+ * (whether in MD5 or SHA1 format).
+ *
+ * @retval true if the lastseen DB is coherent, false otherwise
+ */
+bool IsLastSeenCoherent(void)
 {
     DBHandle *db;
     DBCursor *cursor;
+    bool res = true;
 
     if (!OpenDB(&db, dbid_lastseen))
     {
-        CfOut(cf_error, "", "!! Unable to open lastseen database");
+        Log(LOG_LEVEL_ERR, "Unable to open lastseen database");
         return false;
     }
 
     if (!NewDBCursor(db, &cursor))
     {
-        CfOut(cf_error, "", " !! Unable to create lastseen database cursor");
+        Log(LOG_LEVEL_ERR, "Unable to create lastseen database cursor");
         CloseDB(db);
         return false;
     }
@@ -279,7 +258,243 @@ bool ScanLastSeenQuality(LastSeenQualityCallback callback, void *ctx)
     void *value;
     int ksize, vsize;
 
-    while (NextDB(db, cursor, &key, &ksize, &value, &vsize))
+    Item *qkeys=NULL;
+    Item *akeys=NULL;
+    Item *kkeys=NULL;
+    Item *ahosts=NULL;
+    Item *khosts=NULL;
+
+    char val[CF_BUFSIZE];
+    while (NextDB(cursor, &key, &ksize, &value, &vsize))
+    {
+        if (key[0] != 'k' && key[0] != 'q' && key[0] != 'a' )
+        {
+            continue;
+        }
+
+        if (key[0] == 'q' )
+        {
+            if (strncmp(key,"qiSHA=",5)==0 || strncmp(key,"qoSHA=",5)==0 ||
+                strncmp(key,"qiMD5=",5)==0 || strncmp(key,"qoMD5=",5)==0)
+            {
+                if (IsItemIn(qkeys, key+2)==false)
+                {
+                    PrependItem(&qkeys, key+2, NULL);
+                }
+            }
+        }
+
+        if (key[0] == 'k' )
+        {
+            if (strncmp(key, "kSHA=", 4)==0 || strncmp(key, "kMD5=", 4)==0)
+            {
+                if (IsItemIn(kkeys, key+1)==false)
+                {
+                    PrependItem(&kkeys, key+1, NULL);
+                }
+                if (ReadDB(db, key, &val, vsize))
+                {
+                    if (IsItemIn(khosts, val)==false)
+                    {
+                        PrependItem(&khosts, val, NULL);
+                    }
+                }
+            }
+        }
+
+        if (key[0] == 'a' )
+        {
+            if (IsItemIn(ahosts, key+1)==false)
+            {
+                PrependItem(&ahosts, key+1, NULL);
+            }
+            if (ReadDB(db, key, &val, vsize))
+            {
+                if (IsItemIn(akeys, val)==false)
+                {
+                    PrependItem(&akeys, val, NULL);
+                }
+            }
+        }
+    }
+
+    DeleteDBCursor(cursor);
+    CloseDB(db);
+
+    if (ListsCompare(ahosts, khosts) == false)
+    {
+        res = false;
+        goto clean;
+    }
+    if (ListsCompare(akeys, kkeys) == false)
+    {
+        res = false;
+        goto clean;
+    }
+
+clean:
+    DeleteItemList(qkeys);
+    DeleteItemList(akeys);
+    DeleteItemList(kkeys);
+    DeleteItemList(ahosts);
+    DeleteItemList(khosts);
+
+    return res;
+}
+
+/**
+ * @brief removes all traces of host 'ip' from lastseen DB
+ *
+ * @param[in]     ip : either in (SHA/MD5 format)
+ * @param[in,out] digest: return corresponding digest of input host.
+ *                        If NULL, return nothing
+ * @retval true if entry was deleted, false otherwise
+ */
+bool DeleteIpFromLastSeen(const char *ip, char *digest)
+{
+    DBHandle *db;
+    bool res = false;
+
+    if (!OpenDB(&db, dbid_lastseen))
+    {
+        Log(LOG_LEVEL_ERR, "Unable to open lastseen database");
+        return false;
+    }
+
+    char bufkey[CF_BUFSIZE + 1];
+    char bufhost[CF_BUFSIZE + 1];
+
+    strcpy(bufhost, "a");
+    strlcat(bufhost, ip, CF_BUFSIZE);
+
+    char key[CF_BUFSIZE];
+    if (ReadDB(db, bufhost, &key, sizeof(key)) == true)
+    {
+        strcpy(bufkey, "k");
+        strlcat(bufkey, key, CF_BUFSIZE);
+        if (HasKeyDB(db, bufkey, strlen(bufkey) + 1) == false)
+        {
+            res = false;
+            goto clean;
+        }
+        else
+        {
+            if (digest != NULL)
+            {
+                strcpy(digest, bufkey);
+            }
+            DeleteDB(db, bufkey);
+            DeleteDB(db, bufhost);
+            res = true;
+        }
+    }
+    else
+    {
+        res = false;
+        goto clean;
+    }
+
+    strcpy(bufkey, "qi");
+    strlcat(bufkey, key, CF_BUFSIZE);
+    DeleteDB(db, bufkey);
+
+    strcpy(bufkey, "qo");
+    strlcat(bufkey, key, CF_BUFSIZE);
+    DeleteDB(db, bufkey);
+
+clean:
+    CloseDB(db);
+    return res;
+}
+
+/**
+ * @brief removes all traces of key digest 'key' from lastseen DB
+ *
+ * @param[in]     key : either in (SHA/MD5 format)
+ * @param[in,out] ip  : return the key corresponding host.
+ *                      If NULL, return nothing
+ * @retval true if entry was deleted, false otherwise
+ */
+bool DeleteDigestFromLastSeen(const char *key, char *ip)
+{
+    DBHandle *db;
+    bool res = false;
+
+    if (!OpenDB(&db, dbid_lastseen))
+    {
+        Log(LOG_LEVEL_ERR, "Unable to open lastseen database");
+        return false;
+    }
+    char bufkey[CF_BUFSIZE + 1];
+    char bufhost[CF_BUFSIZE + 1];
+
+    strcpy(bufkey, "k");
+    strlcat(bufkey, key, CF_BUFSIZE);
+
+    char host[CF_BUFSIZE];
+    if (ReadDB(db, bufkey, &host, sizeof(host)) == true)
+    {
+        strcpy(bufhost, "a");
+        strlcat(bufhost, host, CF_BUFSIZE);
+        if (HasKeyDB(db, bufhost, strlen(bufhost) + 1) == false)
+        {
+            res = false;
+            goto clean;
+        }
+        else
+        {
+            if (ip != NULL)
+            {
+                strcpy(ip, host);
+            }
+            DeleteDB(db, bufhost);
+            DeleteDB(db, bufkey);
+            res = true;
+        }
+    }
+    else
+    {
+        res = false;
+        goto clean;
+    }
+
+    strcpy(bufkey, "qi");
+    strlcat(bufkey, key, CF_BUFSIZE);
+    DeleteDB(db, bufkey);
+
+    strcpy(bufkey, "qo");
+    strlcat(bufkey, key, CF_BUFSIZE);
+    DeleteDB(db, bufkey);
+
+clean:
+    CloseDB(db);
+    return res;
+}
+
+/*****************************************************************************/
+bool ScanLastSeenQuality(LastSeenQualityCallback callback, void *ctx)
+{
+    DBHandle *db;
+    DBCursor *cursor;
+
+    if (!OpenDB(&db, dbid_lastseen))
+    {
+        Log(LOG_LEVEL_ERR, "Unable to open lastseen database");
+        return false;
+    }
+
+    if (!NewDBCursor(db, &cursor))
+    {
+        Log(LOG_LEVEL_ERR, "Unable to create lastseen database cursor");
+        CloseDB(db);
+        return false;
+    }
+
+    char *key;
+    void *value;
+    int ksize, vsize;
+
+    while (NextDB(cursor, &key, &ksize, &value, &vsize))
     {
         /* Only look for "keyhost" entries */
         if (key[0] != 'k')
@@ -315,7 +530,7 @@ bool ScanLastSeenQuality(LastSeenQualityCallback callback, void *ctx)
         }
     }
 
-    DeleteDBCursor(db, cursor);
+    DeleteDBCursor(cursor);
     CloseDB(db);
 
     return true;
@@ -340,7 +555,7 @@ int LastSeenHostKeyCount(void)
 
         if (NewDBCursor(dbp, &dbcp))
         {
-            while (NextDB(dbp, dbcp, &key, &ksize, &value, &vsize))
+            while (NextDB(dbcp, &key, &ksize, &value, &vsize))
             {
                 /* Only look for valid "hostkey" entries */
 
@@ -352,11 +567,64 @@ int LastSeenHostKeyCount(void)
                 count++;
             }
 
-            DeleteDBCursor(dbp, dbcp);
+            DeleteDBCursor(dbcp);
         }
 
         CloseDB(dbp);
     }
 
     return count;
+}
+/**
+ * @brief removes all traces of entry 'input' from lastseen DB
+ *
+ * @param[in] key digest (SHA/MD5 format) or free host name string
+ * @param[in] must_be_coherent. false : delete if lastseen is incoherent, 
+ *                              true :  don't if lastseen is incoherent
+ * @param[out] equivalent. If input is a host, return its corresponding
+ *                         digest. If input is a digest, return its
+ *                         corresponding host. CAN BE NULL! If equivalent
+ *                         is null, it stays as NULL
+ * @retval 0 if entry was deleted, <>0 otherwise
+ */
+int RemoveKeysFromLastSeen(const char *input, bool must_be_coherent,
+                           char *equivalent)
+{
+    bool is_coherent = false;
+
+    if (must_be_coherent == true)
+    {
+        is_coherent = IsLastSeenCoherent();
+        if (is_coherent == false)
+        {
+            Log(LOG_LEVEL_ERR, "Lastseen database is incoherent. Will not proceed to remove entries from it.");
+            return 254;
+        }
+    }
+
+    bool is_digest;
+    is_digest = IsDigestOrHost(input);
+
+    if (is_digest == true)
+    {
+        Log(LOG_LEVEL_VERBOSE, "Removing digest '%s' from lastseen database\n", input);
+        if (DeleteDigestFromLastSeen(input, equivalent) == false)
+        {
+            Log(LOG_LEVEL_ERR, "Unable to remove digest from lastseen database.");
+            return 252;
+        }
+    }
+    else
+    {
+        Log(LOG_LEVEL_VERBOSE, "Removing host '%s' from lastseen database\n", input);
+        if (DeleteIpFromLastSeen(input, equivalent) == false)
+        {
+            Log(LOG_LEVEL_ERR, "Unable to remove host from lastseen database.");
+            return 253;
+        }
+    }
+
+    Log(LOG_LEVEL_INFO, "Removed corresponding entries from lastseen database.");
+
+    return 0;
 }

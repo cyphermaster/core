@@ -5,8 +5,6 @@ body common control
   inputs => { "../../default.cf.sub" };
   bundlesequence  => { default("$(this.promise_filename)") };
   version => "1.0";
-nova_edition::
-  host_licenses_paid => "5";
 }
 
 bundle agent init
@@ -40,7 +38,7 @@ bundle agent check
 {
 vars:
   "expect" string => "dest";
-  "result" string => execresult("/usr/bin/perl -le 'printf(\"%s\", readlink(\"$(G.testdir)/b/link\"))'", "noshell");
+  "result" string => execresult("$(G.perl) -le 'printf(\"%s\", readlink(\"$(G.testdir)/b/link\"))'", "noshell");
 
 classes:
   "ok" expression => strcmp("$(result)", "$(expect)");

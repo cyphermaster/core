@@ -1,6 +1,9 @@
 sbin_PROGRAMS = cf-monitord
 
-AM_CPPFLAGS = @CPPFLAGS@ -I$(srcdir)/../libpromises \
+AM_CPPFLAGS = @CPPFLAGS@ \
+	-I$(srcdir)/../libutils \
+	-I$(srcdir)/../libcfnet \
+	-I$(srcdir)/../libpromises \
 	$(NOVA_CPPFLAGS)
 
 if HAVE_NOVA
@@ -16,7 +19,7 @@ cf_monitord_LDADD += ../nova/libcfmonitord/libcfmonitord.la
 endif
 
 cf_monitord_SOURCES = \
-        verify_measurements.c \
+        verify_measurements.c verify_measurements.h \
         env_monitor.c env_monitor.h \
         mon.h \
         mon_cpu.c \
@@ -28,6 +31,11 @@ cf_monitord_SOURCES = \
         mon_processes.c \
         mon_temp.c \
         cf-monitord.c
+
+if !HAVE_NOVA
+cf_monitord_SOURCES += \
+	cf-monitord-enterprise-stubs.c cf-monitord-enterprise-stubs.h
+endif
 
 CLEANFILES = *.gcno *.gcda
 

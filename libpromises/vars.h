@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -28,31 +28,14 @@
 #include "cf3.defs.h"
 #include "assoc.h"
 
-void LoadSystemConstants(void);
-void ForceScalar(char *lval, char *rval);
-void NewScalar(const char *scope, const char *lval, const char *rval, DataType dt);
-void DeleteScalar(const char *scope, const char *lval);
-void NewList(const char *scope, const char *lval, void *rval, DataType dt);
-void DefaultVarPromise(Promise *pp);
+void LoadSystemConstants(EvalContext *ctx);
 
-/*
- * Do not modify returned Rval, its contents may be constant and statically
- * allocated.
- */
-DataType GetVariable(const char *scope, const char *lval, Rval *returnv);
-
-void DeleteVariable(const char *scope, const char *id);
-bool StringContainsVar(const char *s, const char *v);
-int DefinedVariable(char *name);
-bool IsCf3VarString(const char *str);
-int BooleanControl(const char *scope, const char *name);
 const char *ExtractInnerCf3VarString(const char *str, char *substr);
 const char *ExtractOuterCf3VarString(const char *str, char *substr);
 int UnresolvedArgs(Rlist *args);
-int UnresolvedVariables(CfAssoc *ap, char rtype);
 int IsQualifiedVariable(char *var);
-int IsCfList(char *type);
-int AddVariableHash(const char *scope, const char *lval, Rval rval, DataType dtype, const char *fname, int no);
-void DeRefListsInHashtable(char *scope, Rlist *list, Rlist *reflist);
+
+bool StringContainsVar(const char *s, const char *v);
+bool IsCf3VarString(const char *str);
 
 #endif

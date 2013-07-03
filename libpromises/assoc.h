@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -37,8 +37,6 @@ typedef struct
 
 CfAssoc *NewAssoc(const char *lval, Rval rval, DataType dt);
 void DeleteAssoc(CfAssoc *ap);
-CfAssoc *CopyAssoc(CfAssoc *old);
-CfAssoc *AssocNewReference(const char *lval, Rval rval, DataType dtype);
 
 /* - hashtable operations - */
 
@@ -57,16 +55,21 @@ CfAssoc *HashLookupElement(AssocHashTable *hashtable, const char *element);
 /* Copies all elements of old hash table to new one. */
 void HashCopy(AssocHashTable *newhash, AssocHashTable *oldhash);
 
-/* Clear whole hash table */
-void HashClear(AssocHashTable *hashtable);
-
 /* Destroy hash table */
 void HashFree(AssocHashTable *hashtable);
 
 /* HashToList */
-void HashToList(Scope *sp, Rlist **list);
+void ScopeToList(Scope *sp, Rlist **list);
 
-/* - hashtable iterator - */
+
+/*
+ * Disposable iterator over hash table. Does not require deinitialization.
+ */
+typedef struct
+{
+    AssocHashTable *hashtable;
+    int pos;
+} AssocHashTableIterator;
 
 /*
 HashIterator i = HashIteratorInit(hashtable);
@@ -77,7 +80,7 @@ while ((assoc = HashIteratorNext(&i)))
    }
 // No cleanup is required
 */
-HashIterator HashIteratorInit(AssocHashTable *hashtable);
-CfAssoc *HashIteratorNext(HashIterator *iterator);
+AssocHashTableIterator HashIteratorInit(AssocHashTable *hashtable);
+CfAssoc *HashIteratorNext(AssocHashTableIterator *iterator);
 
 #endif

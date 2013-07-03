@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -27,14 +27,11 @@
 
 #include "cf3.defs.h"
 
+#include "logging.h"
 #include "sequence.h"
 
-Body *IsBody(Seq *bodies, const char *ns, const char *key);
-Bundle *IsBundle(Seq *bundles, const char *key);
-Promise *DeRefCopyPromise(const char *scopeid, const Promise *pp);
-Promise *ExpandDeRefPromise(const char *scopeid, Promise *pp);
-void PromiseRef(enum cfreport level, const Promise *pp);
-Promise *NewPromise(char *type, char *promiser);
-void HashPromise(char *salt, Promise *pp, unsigned char digest[EVP_MAX_MD_SIZE + 1], enum cfhashes type);
+Promise *DeRefCopyPromise(EvalContext *ctx, const Promise *pp);
+Promise *ExpandDeRefPromise(EvalContext *ctx, const char *scopeid, const Promise *pp);
+void PromiseRef(LogLevel level, const Promise *pp);
 
 #endif

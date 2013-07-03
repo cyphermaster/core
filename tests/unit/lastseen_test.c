@@ -2,6 +2,7 @@
 #include "dbm_api.h"
 #include "test.h"
 #include "lastseen.h"
+#include "item_lib.h"
 
 #include <setjmp.h>
 #include <cmockery.h>
@@ -31,7 +32,7 @@ static void tests_teardown(void)
     system(cmd);
 }
 
-static void test_newentry(void **context)
+static void test_newentry(void)
 {
     setup();
 
@@ -62,7 +63,7 @@ static void test_newentry(void **context)
     CloseDB(db);
 }
 
-static void test_update(void **context)
+static void test_update(void)
 {
     setup();
 
@@ -84,7 +85,7 @@ static void test_update(void **context)
     CloseDB(db);
 }
 
-static void test_reverse_missing(void **context)
+static void test_reverse_missing(void)
 {
     setup();
 
@@ -93,7 +94,7 @@ static void test_reverse_missing(void **context)
     assert_int_equal(Address2Hostkey("127.0.0.64", result), false);
 }
 
-static void test_reverse_conflict(void **context)
+static void test_reverse_conflict(void)
 {
     setup();
 
@@ -114,7 +115,7 @@ static void test_reverse_conflict(void **context)
     CloseDB(db);
 }
 
-static void test_reverse_missing_forward(void **context)
+static void test_reverse_missing_forward(void)
 {
     setup();
 
@@ -135,14 +136,16 @@ static void test_reverse_missing_forward(void **context)
     CloseDB(db);
 }
 
-static void test_remove(void **context)
+static void test_remove(void)
 {
     setup();
 
     UpdateLastSawHost("SHA-12345", "127.0.0.64", true, 555);
     UpdateLastSawHost("SHA-12345", "127.0.0.64", false, 556);
 
-    RemoveHostFromLastSeen("SHA-12345");
+    //RemoveHostFromLastSeen("SHA-12345");
+    int res;
+    res = DeleteDigestFromLastSeen("SHA-12345", NULL);
 
     DBHandle *db;
     OpenDB(&db, dbid_lastseen);
@@ -154,6 +157,29 @@ static void test_remove(void **context)
 
     CloseDB(db);
 }
+
+static void test_remove_ip(void)
+{
+    setup();
+
+    UpdateLastSawHost("SHA-12345", "127.0.0.64", true, 555);
+    UpdateLastSawHost("SHA-12345", "127.0.0.64", false, 556);
+
+    int res;
+    char digest[CF_BUFSIZE];
+    res = DeleteIpFromLastSeen("127.0.0.64", digest);
+
+    DBHandle *db;
+    OpenDB(&db, dbid_lastseen);
+
+    assert_int_equal(HasKeyDB(db, "qiSHA-12345", strlen("qiSHA-12345") + 1), false);
+    assert_int_equal(HasKeyDB(db, "qoSHA-12345", strlen("qoSHA-12345") + 1), false);
+    assert_int_equal(HasKeyDB(db, "kSHA-12345", strlen("kSHA-12345") + 1), false);
+    assert_int_equal(HasKeyDB(db, "a127.0.0.64", strlen("a127.0.0.64") + 1), false);
+
+    CloseDB(db);
+}
+
 
 int main()
 {
@@ -167,6 +193,7 @@ int main()
             unit_test(test_reverse_conflict),
             unit_test(test_reverse_missing_forward),
             unit_test(test_remove),
+            unit_test(test_remove_ip),
         };
 
     PRINT_TEST_BANNER();
@@ -191,13 +218,9 @@ void FatalError(char *s, ...)
     exit(42);
 }
 
-void CfOut(enum cfreport level, const char *errstr, const char *fmt, ...)
+void Log(LogLevel level, const char *fmt, ...)
 {
     fprintf(stderr, "CFOUT<%d>: ", level);
-    if (errstr)
-    {
-        fprintf(stderr, " %s: %s ", errstr, strerror(errno));
-    }
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
@@ -205,16 +228,18 @@ void CfOut(enum cfreport level, const char *errstr, const char *fmt, ...)
     fprintf(stderr, "\n");
 }
 
-enum cfhashes CF_DEFAULT_DIGEST;
+const char *GetErrorStr(void)
+{
+    return strerror(errno);
+}
+
+HashMethod CF_DEFAULT_DIGEST;
 const char *DAY_TEXT[] = {};
 const char *MONTH_TEXT[] = {};
 const char *SHIFT_TEXT[] = {};
 pthread_mutex_t *cft_output;
-char VIPADDRESS[18];
+char VIPADDRESS[CF_MAX_IP_LEN];
 RSA *PUBKEY;
-
-int DEBUG;
-
 bool MINUSF;
 
 char *MapAddress(char *addr)
@@ -222,7 +247,7 @@ char *MapAddress(char *addr)
     fail();
 }
 
-char *HashPrint(enum cfhashes type, unsigned char digest[EVP_MAX_MD_SIZE + 1])
+char *HashPrintSafe(HashMethod type, unsigned char digest[EVP_MAX_MD_SIZE + 1], char buffer[EVP_MAX_MD_SIZE * 4])
 {
     fail();
 }
@@ -237,7 +262,7 @@ int ThreadUnlock(pthread_mutex_t *name)
     fail();
 }
 
-void HashPubKey(RSA *key, unsigned char digest[EVP_MAX_MD_SIZE + 1], enum cfhashes type)
+void HashPubKey(RSA *key, unsigned char digest[EVP_MAX_MD_SIZE + 1], HashMethod type)
 {
     fail();
 }

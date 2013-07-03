@@ -2,8 +2,6 @@
 #include "dbm_api.h"
 #include "lastseen.h"
 
-#include "alphalist.h"
-
 char CFWORKDIR[CF_BUFSIZE] = "/tmp";
 
 
@@ -51,13 +49,9 @@ void FatalError(char *s, ...)
     exit(42);
 }
 
-void CfOut(enum cfreport level, const char *errstr, const char *fmt, ...)
+void Log(LogLevel level, const char *fmt, ...)
 {
     fprintf(stderr, "CFOUT<%d>: ", level);
-    if (errstr)
-    {
-        fprintf(stderr, " %s: %s ", errstr, strerror(errno));
-    }
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
@@ -65,23 +59,18 @@ void CfOut(enum cfreport level, const char *errstr, const char *fmt, ...)
     fprintf(stderr, "\n");
 }
 
-enum cfhashes CF_DEFAULT_DIGEST;
+const char *GetErrorStr(void)
+{
+    return strerror(errno);
+}
+
+HashMethod CF_DEFAULT_DIGEST;
 const char *DAY_TEXT[] = {};
 const char *MONTH_TEXT[] = {};
 const char *SHIFT_TEXT[] = {};
 pthread_mutex_t *cft_output;
-char VIPADDRESS[18];
+char VIPADDRESS[CF_MAX_IP_LEN];
 RSA *PUBKEY;
-
-AlphaListIterator AlphaListIteratorInit(AlphaList *al)
-{
-    exit(42);
-}
-
-const Item *AlphaListIteratorNext(AlphaListIterator *iterator)
-{
-    exit(42);
-}
 
 Item *IdempPrependItem(Item **liststart, const char *itemstring, const char *classes)
 {
@@ -92,8 +81,6 @@ bool IsItemIn(Item *list, const char *item)
 {
     exit(42);
 }
-
-int DEBUG;
 
 void DeleteItemList(Item *item)
 {
@@ -107,7 +94,7 @@ char *MapAddress(char *addr)
     exit(42);
 }
 
-char *HashPrint(enum cfhashes type, unsigned char digest[EVP_MAX_MD_SIZE + 1])
+char *HashPrintSafe(HashMethod type, unsigned char digest[EVP_MAX_MD_SIZE + 1], char buffer[EVP_MAX_MD_SIZE * 4])
 {
     exit(42);
 }
@@ -122,12 +109,12 @@ int ThreadUnlock(pthread_mutex_t *name)
     exit(42);
 }
 
-void HashPubKey(RSA *key, unsigned char digest[EVP_MAX_MD_SIZE + 1], enum cfhashes type)
+void HashPubKey(RSA *key, unsigned char digest[EVP_MAX_MD_SIZE + 1], HashMethod type)
 {
     exit(42);
 }
 
-void *GetConstraintValue(char *lval, Promise *promise, char type)
+void *ConstraintGetRvalValue(char *lval, Promise *promise, char type)
 {
     exit(42);
 }

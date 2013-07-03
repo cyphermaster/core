@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,24 +17,23 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
 #include "args.h"
 
 #include "promises.h"
 #include "syntax.h"
-#include "reporting.h"
 #include "expand.h"
 #include "vars.h"
-#include "cfstream.h"
-#include "fncall.h"
 #include "logging.h"
+#include "fncall.h"
 #include "evalfunction.h"
 #include "misc_lib.h"
+#include "scope.h"
+#include "audit.h"
 
 /******************************************************************/
 /* Argument propagation                                           */
@@ -58,107 +57,7 @@ leads to Hash Association (lval,rval) => (user,"$(person)")
 
 /******************************************************************/
 
-int MapBodyArgs(const char *scopeid, Rlist *give, const Rlist *take)
-{
-    Rlist *rpg = NULL;
-    const Rlist *rpt = NULL;
-    FnCall *fp;
-    DataType dtg = DATA_TYPE_NONE, dtt = DATA_TYPE_NONE;
-    char *lval;
-    void *rval;
-    int len1, len2;
-
-    CfDebug("MapBodyArgs(begin)\n");
-
-    len1 = RlistLen(give);
-    len2 = RlistLen(take);
-
-    if (len1 != len2)
-    {
-        CfOut(cf_error, "", " !! Argument mismatch in body template give[+args] = %d, take[-args] = %d", len1, len2);
-        return false;
-    }
-
-    for (rpg = give, rpt = take; rpg != NULL && rpt != NULL; rpg = rpg->next, rpt = rpt->next)
-    {
-        dtg = StringDataType(scopeid, (char *) rpg->item);
-        dtt = StringDataType(scopeid, (char *) rpt->item);
-
-        if (dtg != dtt)
-        {
-            CfOut(cf_error, "", "Type mismatch between logical/formal parameters %s/%s\n", (char *) rpg->item,
-                  (char *) rpt->item);
-            CfOut(cf_error, "", "%s is %s whereas %s is %s\n", (char *) rpg->item, CF_DATATYPES[dtg],
-                  (char *) rpt->item, CF_DATATYPES[dtt]);
-        }
-
-        switch (rpg->type)
-        {
-        case RVAL_TYPE_SCALAR:
-            lval = (char *) rpt->item;
-            rval = rpg->item;
-            CfDebug("MapBodyArgs(SCALAR,%s,%s)\n", lval, (char *) rval);
-            AddVariableHash(scopeid, lval, (Rval) { rval, RVAL_TYPE_SCALAR }, dtg, NULL, 0);
-            break;
-
-        case RVAL_TYPE_LIST:
-            lval = (char *) rpt->item;
-            rval = rpg->item;
-            AddVariableHash(scopeid, lval, (Rval) { rval, RVAL_TYPE_LIST }, dtg, NULL, 0);
-            break;
-
-        case RVAL_TYPE_FNCALL:
-            fp = (FnCall *) rpg->item;
-            dtg = DATA_TYPE_NONE;
-            {
-                const FnCallType *fncall_type = FnCallTypeGet(fp->name);
-                if (fncall_type)
-                {
-                    dtg = fncall_type->dtype;
-                }
-            }
-
-            FnCallResult res = FnCallEvaluate(fp, NULL);
-
-            if (res.status == FNCALL_FAILURE && THIS_AGENT_TYPE != AGENT_TYPE_COMMON)
-            {
-                // Unresolved variables
-                if (VERBOSE)
-                {
-                    printf
-                        (" !! Embedded function argument does not resolve to a name - probably too many evaluation levels for ");
-                    FnCallShow(stdout, fp);
-                    printf(" (try simplifying)\n");
-                }
-            }
-            else
-            {
-                FnCallDestroy(fp);
-
-                rpg->item = res.rval.item;
-                rpg->type = res.rval.type;
-
-                lval = (char *) rpt->item;
-                rval = rpg->item;
-
-                AddVariableHash(scopeid, lval, (Rval) {rval, RVAL_TYPE_SCALAR }, dtg, NULL, 0);
-            }
-
-            break;
-
-        default:
-            /* Nothing else should happen */
-            ProgrammingError("Software error: something not a scalar/function in argument literal");
-        }
-    }
-
-    CfDebug("MapBodyArgs(end)\n");
-    return true;
-}
-
-/******************************************************************/
-
-Rlist *NewExpArgs(const FnCall *fp, const Promise *pp)
+Rlist *NewExpArgs(EvalContext *ctx, const FnCall *fp, const Promise *pp)
 {
     int len;
     Rval rval;
@@ -172,9 +71,9 @@ Rlist *NewExpArgs(const FnCall *fp, const Promise *pp)
     {
         if (len != FnNumArgs(fn))
         {
-            CfOut(cf_error, "", "Arguments to function %s(.) do not tally. Expect %d not %d",
+            Log(LOG_LEVEL_ERR, "Arguments to function %s(.) do not tally. Expect %d not %d",
                   fp->name, FnNumArgs(fn), len);
-            PromiseRef(cf_error, pp);
+            PromiseRef(LOG_LEVEL_ERR, pp);
             exit(1);
         }
     }
@@ -185,14 +84,13 @@ Rlist *NewExpArgs(const FnCall *fp, const Promise *pp)
         {
         case RVAL_TYPE_FNCALL:
             subfp = (FnCall *) rp->item;
-            rval = FnCallEvaluate(subfp, pp).rval;
+            rval = FnCallEvaluate(ctx, subfp, pp).rval;
             break;
         default:
-            rval = ExpandPrivateRval(CONTEXTID, (Rval) {rp->item, rp->type});
+            rval = ExpandPrivateRval(ctx, ScopeGetCurrent()->scope, (Rval) {rp->item, rp->type});
             break;
         }
 
-        CfDebug("EXPARG: %s.%s\n", CONTEXTID, (char *) rval.item);
         RlistAppend(&newargs, rval.item, rval.type);
         RvalDestroy(rval);
     }
@@ -211,7 +109,7 @@ void DeleteExpArgs(Rlist *args)
 
 /******************************************************************/
 
-void ArgTemplate(FnCall *fp, const FnCallArg *argtemplate, Rlist *realargs)
+void ArgTemplate(EvalContext *ctx, FnCall *fp, const FnCallArg *argtemplate, Rlist *realargs)
 {
     int argnum, i;
     Rlist *rp = fp->args;
@@ -225,7 +123,11 @@ void ArgTemplate(FnCall *fp, const FnCallArg *argtemplate, Rlist *realargs)
         if (rp->type != RVAL_TYPE_FNCALL)
         {
             /* Nested functions will not match to lval so don't bother checking */
-            CheckConstraintTypeMatch(id, (Rval) {rp->item, rp->type}, argtemplate[argnum].dtype, argtemplate[argnum].pattern, 1);
+            SyntaxTypeMatch err = CheckConstraintTypeMatch(id, (Rval) {rp->item, rp->type}, argtemplate[argnum].dtype, argtemplate[argnum].pattern, 1);
+            if (err != SYNTAX_TYPE_MATCH_OK && err != SYNTAX_TYPE_MATCH_ERROR_UNEXPANDED)
+            {
+                FatalError(ctx, "in %s: %s", id, SyntaxTypeMatchToString(err));
+            }
         }
 
         rp = rp->next;
@@ -234,7 +136,6 @@ void ArgTemplate(FnCall *fp, const FnCallArg *argtemplate, Rlist *realargs)
     if (argnum != RlistLen(realargs) && !fn->varargs)
     {
         snprintf(output, CF_BUFSIZE, "Argument template mismatch handling function %s(", fp->name);
-        ReportError(output);
         RlistShow(stderr, realargs);
         fprintf(stderr, ")\n");
 
@@ -253,13 +154,6 @@ void ArgTemplate(FnCall *fp, const FnCallArg *argtemplate, Rlist *realargs)
             printf("\n");
         }
 
-        FatalError("Bad arguments");
+        FatalError(ctx, "Bad arguments");
     }
-
-    for (rp = realargs; rp != NULL; rp = rp->next)
-    {
-        CfDebug("finalarg: %s\n", (char *) rp->item);
-    }
-
-    CfDebug("End ArgTemplate\n");
 }

@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,12 +17,12 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
 
-#include "cf3.defs.h"
+#include "env_monitor.h"
 
 #include "env_context.h"
 #include "mon.h"
@@ -32,29 +32,24 @@
 #include "promises.h"
 #include "item_lib.h"
 #include "conversion.h"
-#include "reporting.h"
+#include "ornaments.h"
 #include "expand.h"
 #include "scope.h"
 #include "sysinfo.h"
-#include "cfstream.h"
 #include "signals.h"
-#include "transaction.h"
+#include "locks.h"
 #include "exec_tools.h"
 #include "generic_agent.h" // WritePID
 #include "files_lib.h"
 #include "unix.h"
 #include "verify_measurements.h"
+#include "verify_classes.h"
+#include "cf-monitord-enterprise-stubs.h"
 
 #ifdef HAVE_NOVA
-#include "cf.nova.h"
-#include "history.h"
+# include "history.h"
 #endif
 
-#include <math.h>
-
-#ifndef HAVE_NOVA
-static void HistoryUpdate(Averages newvals);
-#endif
 
 /*****************************************************************************/
 /* Globals                                                                   */
@@ -102,22 +97,22 @@ int NO_FORK = false;
 
 static void GetDatabaseAge(void);
 static void LoadHistogram(void);
-static void GetQ(const Policy *policy, const ReportContext *report_context);
-static Averages EvalAvQ(char *timekey);
+static void GetQ(EvalContext *ctx, const Policy *policy);
+static Averages EvalAvQ(EvalContext *ctx, char *timekey);
 static void ArmClasses(Averages newvals, char *timekey);
-static void GatherPromisedMeasures(const Policy *policy, const ReportContext *report_context);
+static void GatherPromisedMeasures(EvalContext *ctx, const Policy *policy);
 
 static void LeapDetection(void);
 static Averages *GetCurrentAverages(char *timekey);
-static void UpdateAverages(char *timekey, Averages newvals);
-static void UpdateDistributions(char *timekey, Averages *av);
+static void UpdateAverages(EvalContext *ctx, char *timekey, Averages newvals);
+static void UpdateDistributions(EvalContext *ctx, char *timekey, Averages *av);
 static double WAverage(double newvals, double oldvals, double age);
 static double SetClasses(char *name, double variable, double av_expect, double av_var, double localav_expect,
                          double localav_var, Item **classlist, char *timekey);
 static void SetVariable(char *name, double now, double average, double stddev, Item **list);
 static double RejectAnomaly(double new, double av, double var, double av2, double var2);
 static void ZeroArrivals(void);
-static void KeepMonitorPromise(Promise *pp);
+static void KeepMonitorPromise(EvalContext *ctx, Promise *pp, void *param);
 
 /****************************************************************/
 
@@ -173,7 +168,7 @@ void MonitorInitialize(void)
     MonTempInit();
     MonOtherInit();
 
-    CfDebug("Finished with initialization.\n");
+    Log(LOG_LEVEL_DEBUG, "Finished with monitor initialization");
 }
 
 /*********************************************************************/
@@ -192,11 +187,11 @@ static void GetDatabaseAge()
     if (ReadDB(dbp, "DATABASE_AGE", &AGE, sizeof(double)))
     {
         WAGE = AGE / SECONDS_PER_WEEK * CF_MEASURE_INTERVAL;
-        CfDebug("\n\nPrevious DATABASE_AGE %f\n\n", AGE);
+        Log(LOG_LEVEL_DEBUG, "Previous DATABASE_AGE %f", AGE);
     }
     else
     {
-        CfDebug("No previous AGE\n");
+        Log(LOG_LEVEL_DEBUG, "No previous DATABASE_AGE");
         AGE = 0.0;
     }
 
@@ -217,7 +212,7 @@ static void LoadHistogram(void)
 
     if ((fp = fopen(filename, "r")) == NULL)
     {
-        CfOut(cf_verbose, "fopen", "Unable to load histogram data");
+        Log(LOG_LEVEL_VERBOSE, "Unable to load histogram data. (fopen: %s)", GetErrorStr());
         return;
     }
 
@@ -230,7 +225,7 @@ static void LoadHistogram(void)
     {
         if (fscanf(fp, "%d ", &position) != 1)
         {
-            CfOut(cf_error, "", "Format error in histogram file '%s' - aborting", filename);
+            Log(LOG_LEVEL_ERR, "Format error in histogram file '%s' - aborting", filename);
             break;
         }
 
@@ -240,7 +235,7 @@ static void LoadHistogram(void)
             {
                 if (fscanf(fp, "%lf ", &(HISTOGRAM[i][day][position])) != 1)
                 {
-                    CfOut(cf_verbose, "fscanf", "Format error in histogram file '%s'", filename);
+                    Log(LOG_LEVEL_VERBOSE, "Format error in histogram file '%s'. (fscanf: %s)", filename, GetErrorStr());
                     HISTOGRAM[i][day][position] = 0;
                 }
 
@@ -264,26 +259,35 @@ static void LoadHistogram(void)
 
 /*********************************************************************/
 
-void MonitorStartServer(const Policy *policy, const ReportContext *report_context)
+void MonitorStartServer(EvalContext *ctx, const Policy *policy)
 {
     char timekey[CF_SMALLBUF];
     Averages averages;
-    Promise *pp = NewPromise("monitor_cfengine", "the monitor daemon");
-    Attributes dummyattr;
+
+    Policy *monitor_cfengine_policy = PolicyNew();
+    Promise *pp = NULL;
+    {
+        Bundle *bp = PolicyAppendBundle(monitor_cfengine_policy, NamespaceDefault(), "monitor_cfengine_bundle", "agent", NULL, NULL);
+        PromiseType *tp = BundleAppendPromiseType(bp, "monitor_cfengine");
+
+        pp = PromiseTypeAppendPromise(tp, "the monitor daemon", (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, NULL);
+    }
+    assert(pp);
+
     CfLock thislock;
 
 #ifdef __MINGW32__
 
     if (!NO_FORK)
     {
-        CfOut(cf_verbose, "", "Windows does not support starting processes in the background - starting in foreground");
+        Log(LOG_LEVEL_VERBOSE, "Windows does not support starting processes in the background - starting in foreground");
     }
 
 #else /* !__MINGW32__ */
 
     if ((!NO_FORK) && (fork() != 0))
     {
-        CfOut(cf_inform, "", "cf-monitord: starting\n");
+        Log(LOG_LEVEL_INFO, "cf-monitord: starting");
         _exit(0);
     }
 
@@ -294,14 +298,16 @@ void MonitorStartServer(const Policy *policy, const ReportContext *report_contex
 
 #endif /* !__MINGW32__ */
 
-    memset(&dummyattr, 0, sizeof(dummyattr));
-    dummyattr.transaction.ifelapsed = 0;
-    dummyattr.transaction.expireafter = 0;
+    TransactionContext tc = {
+        .ifelapsed = 0,
+        .expireafter = 0,
+    };
 
-    thislock = AcquireLock(pp->promiser, VUQNAME, CFSTARTTIME, dummyattr, pp, false);
+    thislock = AcquireLock(ctx, pp->promiser, VUQNAME, CFSTARTTIME, tc, pp, false);
 
     if (thislock.lock == NULL)
     {
+        PolicyDestroy(monitor_cfengine_policy);
         return;
     }
 
@@ -311,9 +317,9 @@ void MonitorStartServer(const Policy *policy, const ReportContext *report_contex
 
     while (!IsPendingTermination())
     {
-        GetQ(policy, report_context);
+        GetQ(ctx, policy);
         snprintf(timekey, sizeof(timekey), "%s", GenTimeKey(time(NULL)));
-        averages = EvalAvQ(timekey);
+        averages = EvalAvQ(ctx, timekey);
         LeapDetection();
         ArmClasses(averages, timekey);
 
@@ -323,14 +329,14 @@ void MonitorStartServer(const Policy *policy, const ReportContext *report_contex
 
         ITER++;
     }
+
+    PolicyDestroy(monitor_cfengine_policy);
 }
 
 /*********************************************************************/
 
-static void GetQ(const Policy *policy, const ReportContext *report_context)
+static void GetQ(EvalContext *ctx, const Policy *policy)
 {
-    CfDebug("========================= GET Q ==============================\n");
-
     MonEntropyClassesReset();
 
     ZeroArrivals();
@@ -341,16 +347,16 @@ static void GetQ(const Policy *policy, const ReportContext *report_context)
     MonLoadGatherData(CF_THIS);
     MonDiskGatherData(CF_THIS);
     MonNetworkGatherData(CF_THIS);
-    MonNetworkSnifferGatherData(CF_THIS);
+    MonNetworkSnifferGatherData();
     MonTempGatherData(CF_THIS);
 #endif /* !__MINGW32__ */
     MonOtherGatherData(CF_THIS);
-    GatherPromisedMeasures(policy, report_context);
+    GatherPromisedMeasures(ctx, policy);
 }
 
 /*********************************************************************/
 
-static Averages EvalAvQ(char *t)
+static Averages EvalAvQ(EvalContext *ctx, char *t)
 {
     Averages *lastweek_vals, newvals;
     double last5_vals[CF_OBSERVABLES];
@@ -363,7 +369,7 @@ static Averages EvalAvQ(char *t)
 
     if ((lastweek_vals = GetCurrentAverages(t)) == NULL)
     {
-        CfOut(cf_error, "", "Error reading average database");
+        Log(LOG_LEVEL_ERR, "Error reading average database");
         exit(1);
     }
 
@@ -405,12 +411,12 @@ static Averages EvalAvQ(char *t)
         
         LOCALAV.Q[i].q = This[i];
 
-        CfDebug("Previous week's %s.q %lf\n", name, lastweek_vals->Q[i].q);
-        CfDebug("Previous week's %s.var %lf\n", name, lastweek_vals->Q[i].var);
-        CfDebug("Previous week's %s.ex %lf\n", name, lastweek_vals->Q[i].expect);
+        Log(LOG_LEVEL_DEBUG, "Previous week's '%s.q' %lf", name, lastweek_vals->Q[i].q);
+        Log(LOG_LEVEL_DEBUG, "Previous week's '%s.var' %lf", name, lastweek_vals->Q[i].var);
+        Log(LOG_LEVEL_DEBUG, "Previous week's '%s.ex' %lf", name, lastweek_vals->Q[i].expect);
 
-        CfDebug("Just measured: CF_THIS[%s] = %lf\n", name, CF_THIS[i]);
-        CfDebug("Just sanitized: This[%s] = %lf\n", name, This[i]);
+        Log(LOG_LEVEL_DEBUG, "Just measured: CF_THIS[%s] = %lf", name, CF_THIS[i]);
+        Log(LOG_LEVEL_DEBUG, "Just sanitized: This[%s] = %lf", name, This[i]);
 
         newvals.Q[i].expect = WAverage(This[i], lastweek_vals->Q[i].expect, WAGE);
         LOCALAV.Q[i].expect = WAverage(newvals.Q[i].expect, LOCALAV.Q[i].expect, ITER);
@@ -443,20 +449,20 @@ static Averages EvalAvQ(char *t)
             LOCALAV.Q[i].var = WAverage(newvals.Q[i].var, LOCALAV.Q[i].var, ITER);
         }
 
-        CfOut(cf_verbose, "", "[%d] %s q=%lf, var=%lf, ex=%lf", i, name,
+        Log(LOG_LEVEL_VERBOSE, "[%d] %s q=%lf, var=%lf, ex=%lf", i, name,
               newvals.Q[i].q, newvals.Q[i].var, newvals.Q[i].expect);
 
-        CfOut(cf_verbose, "", "[%d] = %lf -> (%lf#%lf) local [%lf#%lf]\n", i, This[i], newvals.Q[i].expect,
+        Log(LOG_LEVEL_VERBOSE, "[%d] = %lf -> (%lf#%lf) local [%lf#%lf]", i, This[i], newvals.Q[i].expect,
               sqrt(newvals.Q[i].var), LOCALAV.Q[i].expect, sqrt(LOCALAV.Q[i].var));
 
         if (This[i] > 0)
         {
-            CfOut(cf_verbose, "", "Storing %.2lf in %s\n", This[i], name);
+            Log(LOG_LEVEL_VERBOSE, "Storing %.2lf in %s", This[i], name);
         }
     }
 
-    UpdateAverages(t, newvals);
-    UpdateDistributions(t, lastweek_vals);        /* Distribution about mean */
+    UpdateAverages(ctx, t, newvals);
+    UpdateDistributions(ctx, t, lastweek_vals);        /* Distribution about mean */
 
     return newvals;
 }
@@ -475,7 +481,7 @@ static void LeapDetection(void)
 
         if (!LDT_FULL)
         {
-            CfDebug("LDT Buffer full at %d\n", LDT_BUFSIZE);
+            Log(LOG_LEVEL_DEBUG, "LDT Buffer full at %d", LDT_BUFSIZE);
             LDT_FULL = true;
         }
     }
@@ -556,10 +562,25 @@ static void PublishEnvironment(Item *classes)
 
     fclose(fp);
 
-    cf_rename(ENVFILE_NEW, ENVFILE);
+    rename(ENVFILE_NEW, ENVFILE);
 }
 
 /*********************************************************************/
+
+static void AddOpenPortsClasses(const char *name, const Item *value, Item **classlist)
+{
+    Writer *w = StringWriter();
+    WriterWriteF(w, "@%s=", name);
+    PrintItemList(value, w);
+    if (StringWriterLength(w) <= 1500)
+    {
+        AppendItem(classlist, StringWriterClose(w), NULL);
+    }
+    else
+    {
+        WriterClose(w);
+    }
+}
 
 static void ArmClasses(Averages av, char *timekey)
 {
@@ -570,8 +591,6 @@ static void ArmClasses(Averages av, char *timekey)
     static int anomaly[CF_OBSERVABLES][LDT_BUFSIZE];
     extern Item *ALL_INCOMING;
     extern Item *MON_UDP4, *MON_UDP6, *MON_TCP4, *MON_TCP6;
-
-    CfDebug("Arm classes for %s\n", timekey);
 
     for (i = 0; i < CF_OBSERVABLES; i++)
     {
@@ -596,7 +615,7 @@ static void ArmClasses(Averages av, char *timekey)
         {
             anomaly[i][LDT_POS] = true; /* Remember the last anomaly value */
 
-            CfOut(cf_verbose, "", "LDT(%d) in %s chi = %.2f thresh %.2f \n", LDT_POS, name, CHI[i], CHI_LIMIT[i]);
+            Log(LOG_LEVEL_VERBOSE, "LDT(%d) in %s chi = %.2f thresh %.2f ", LDT_POS, name, CHI[i], CHI_LIMIT[i]);
 
             /* Last printed element is now */
 
@@ -629,7 +648,7 @@ static void ArmClasses(Averages av, char *timekey)
             }
 
             AppendItem(&classlist, buff, "2");
-            NewPersistentContext(buff, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
+            EvalContextHeapPersistentSave(buff, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
         }
         else
         {
@@ -657,56 +676,17 @@ static void ArmClasses(Averages av, char *timekey)
 
     // Report on the open ports, in various ways
 
-    ldt_buff[0] = '\0';
-    PrintItemList(ldt_buff,CF_BUFSIZE,ALL_INCOMING);
-
-    if (strlen(ldt_buff) < 1500)
-    {
-        snprintf(buff,CF_BUFSIZE,"@listening_ports=%s",ldt_buff);
-        AppendItem(&classlist,buff,NULL);
-    }
-
-    ldt_buff[0] = '\0';
-    PrintItemList(ldt_buff,CF_BUFSIZE,MON_UDP6);
-
-    if (strlen(ldt_buff) < 1500)
-    {
-        snprintf(buff,CF_BUFSIZE,"@listening_udp6_ports=%s",ldt_buff);
-        AppendItem(&classlist,buff,NULL);
-    }
-
-    ldt_buff[0] = '\0';
-    PrintItemList(ldt_buff,CF_BUFSIZE,MON_UDP4);
-
-    if (strlen(ldt_buff) < 1500)
-    {
-        snprintf(buff,CF_BUFSIZE,"@listening_udp4_ports=%s",ldt_buff);
-        AppendItem(&classlist,buff,NULL);
-    }
-
-    ldt_buff[0] = '\0';
-    PrintItemList(ldt_buff,CF_BUFSIZE,MON_TCP6);
-
-    if (strlen(ldt_buff) < 1500)
-    {
-        snprintf(buff,CF_BUFSIZE,"@listening_tcp6_ports=%s",ldt_buff);
-        AppendItem(&classlist,buff,NULL);
-    }
-
-    ldt_buff[0] = '\0';
-    PrintItemList(ldt_buff,CF_BUFSIZE,MON_TCP4);
-
-    if (strlen(ldt_buff) < 1500)
-    {
-        snprintf(buff,CF_BUFSIZE,"@listening_tcp4_ports=%s",ldt_buff);
-        AppendItem(&classlist,buff,NULL);
-    }
+    AddOpenPortsClasses("listening_ports", ALL_INCOMING, &classlist);
+    AddOpenPortsClasses("listening_udp6_ports", MON_UDP6, &classlist);
+    AddOpenPortsClasses("listening_udp4_ports", MON_UDP4, &classlist);
+    AddOpenPortsClasses("listening_tcp6_ports", MON_TCP6, &classlist);
+    AddOpenPortsClasses("listening_tcp4_ports", MON_TCP4, &classlist);
 
     // Port addresses
 
     if (ListLen(MON_TCP6) + ListLen(MON_TCP4) > 512)
     {
-        CfOut(cf_inform, "", "Disabling address information of TCP ports in LISTEN state: more than 512 listening ports are detected");
+        Log(LOG_LEVEL_INFO, "Disabling address information of TCP ports in LISTEN state: more than 512 listening ports are detected");
     }
     else
     {
@@ -763,12 +743,12 @@ static Averages *GetCurrentAverages(char *timekey)
 
         for (i = 0; i < CF_OBSERVABLES; i++)
         {
-            CfDebug("Previous values (%lf,..) for time index %s\n\n", entry.Q[i].expect, timekey);
+            Log(LOG_LEVEL_DEBUG, "Previous values (%lf,..) for time index '%s'", entry.Q[i].expect, timekey);
         }
     }
     else
     {
-        CfDebug("No previous value for time index %s\n", timekey);
+        Log(LOG_LEVEL_DEBUG, "No previous value for time index '%s'", timekey);
     }
 
     CloseDB(dbp);
@@ -777,7 +757,7 @@ static Averages *GetCurrentAverages(char *timekey)
 
 /*****************************************************************************/
 
-static void UpdateAverages(char *timekey, Averages newvals)
+static void UpdateAverages(EvalContext *ctx, char *timekey, Averages newvals)
 {
     CF_DB *dbp;
 
@@ -786,18 +766,18 @@ static void UpdateAverages(char *timekey, Averages newvals)
         return;
     }
 
-    CfOut(cf_inform, "", "Updated averages at %s\n", timekey);
+    Log(LOG_LEVEL_INFO, "Updated averages at '%s'", timekey);
 
     WriteDB(dbp, timekey, &newvals, sizeof(Averages));
     WriteDB(dbp, "DATABASE_AGE", &AGE, sizeof(double));
 
     CloseDB(dbp);
-    HistoryUpdate(newvals);
+    HistoryUpdate(ctx, newvals);
 }
 
 /*****************************************************************************/
 
-static void UpdateDistributions(char *timekey, Averages *av)
+static void UpdateDistributions(EvalContext *ctx, char *timekey, Averages *av)
 {
     int position, day, i;
     char filename[CF_BUFSIZE];
@@ -808,7 +788,7 @@ static void UpdateDistributions(char *timekey, Averages *av)
    std-deviation for the current time.
 */
 
-    if (IsDefinedClass("Min40_45", NULL))
+    if (IsDefinedClass(ctx, "Min40_45", NULL))
     {
         day = Day2Number(timekey);
 
@@ -827,7 +807,7 @@ static void UpdateDistributions(char *timekey, Averages *av)
 
         if ((fp = fopen(filename, "w")) == NULL)
         {
-            CfOut(cf_error, "fopen", "Unable to save histograms");
+            Log(LOG_LEVEL_ERR, "Unable to save histograms. (fopen: %s)", GetErrorStr());
             return;
         }
 
@@ -926,20 +906,17 @@ static double SetClasses(char *name, double variable, double av_expect, double a
     char buffer[CF_BUFSIZE], buffer2[CF_BUFSIZE];
     double dev, delta, sigma, ldelta, lsigma, sig;
 
-    CfDebug("\n SetClasses(%s,X=%lf,avX=%lf,varX=%lf,lavX=%lf,lvarX=%lf,%s)\n", name, variable, av_expect, av_var,
-            localav_expect, localav_var, timekey);
-
     delta = variable - av_expect;
     sigma = sqrt(av_var);
     ldelta = variable - localav_expect;
     lsigma = sqrt(localav_var);
     sig = sqrt(sigma * sigma + lsigma * lsigma);
 
-    CfDebug(" delta = %lf,sigma = %lf, lsigma = %lf, sig = %lf\n", delta, sigma, lsigma, sig);
+    Log(LOG_LEVEL_DEBUG, "delta = %lf, sigma = %lf, lsigma = %lf, sig = %lf", delta, sigma, lsigma, sig);
 
     if ((sigma == 0.0) || (lsigma == 0.0))
     {
-        CfDebug(" No sigma variation .. can't measure class\n");
+        Log(LOG_LEVEL_DEBUG, "No sigma variation .. can't measure class");
 
         snprintf(buffer, CF_MAXVARSIZE, "entropy_%s.*", name);
         MonEntropyPurgeUnused(buffer);
@@ -947,11 +924,11 @@ static double SetClasses(char *name, double variable, double av_expect, double a
         return sig;
     }
 
-    CfDebug("Setting classes for %s...\n", name);
+    Log(LOG_LEVEL_DEBUG, "Setting classes for '%s'...", name);
 
     if (fabs(delta) < cf_noise_threshold)       /* Arbitrary limits on sensitivity  */
     {
-        CfDebug(" Sensitivity too high ..\n");
+        Log(LOG_LEVEL_DEBUG, "Sensitivity too high");
 
         buffer[0] = '\0';
         strcpy(buffer, name);
@@ -978,7 +955,7 @@ static double SetClasses(char *name, double variable, double av_expect, double a
             strcpy(buffer2, buffer);
             strcat(buffer2, "_microanomaly");
             AppendItem(classlist, buffer2, "2");
-            NewPersistentContext(buffer2, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
+            EvalContextHeapPersistentSave(buffer2, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
         }
 
         return sig;             /* Granularity makes this silly */
@@ -1025,7 +1002,7 @@ static double SetClasses(char *name, double variable, double av_expect, double a
             strcpy(buffer2, buffer);
             strcat(buffer2, "_dev2");
             AppendItem(classlist, buffer2, "2");
-            NewPersistentContext(buffer2, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
+            EvalContextHeapPersistentSave(buffer2, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
         }
 
         if (dev > 3.0 * sqrt(2.0))
@@ -1033,7 +1010,7 @@ static double SetClasses(char *name, double variable, double av_expect, double a
             strcpy(buffer2, buffer);
             strcat(buffer2, "_anomaly");
             AppendItem(classlist, buffer2, "3");
-            NewPersistentContext(buffer2, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
+            EvalContextHeapPersistentSave(buffer2, "measurements", CF_PERSISTENCE, CONTEXT_STATE_POLICY_PRESERVE);
         }
 
         return sig;
@@ -1127,7 +1104,7 @@ static double RejectAnomaly(double new, double average, double variance, double 
     }
     else
     {
-        CfOut(cf_verbose, "", "Value accepted\n");
+        Log(LOG_LEVEL_VERBOSE, "Value accepted");
         return new;
     }
 }
@@ -1136,107 +1113,94 @@ static double RejectAnomaly(double new, double average, double variance, double 
 /* Level 5                                                     */
 /***************************************************************/
 
-static void GatherPromisedMeasures(const Policy *policy, const ReportContext *report_context)
+static void GatherPromisedMeasures(EvalContext *ctx, const Policy *policy)
 {
-    char *scope;
-
     for (size_t i = 0; i < SeqLength(policy->bundles); i++)
     {
         const Bundle *bp = SeqAt(policy->bundles, i);
-
-        scope = bp->name;
-        SetNewScope(bp->name);
+        EvalContextStackPushBundleFrame(ctx, bp, false);
 
         if ((strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_MONITOR]) == 0) || (strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_COMMON]) == 0))
         {
-            for (size_t j = 0; j < SeqLength(bp->subtypes); j++)
+            for (size_t j = 0; j < SeqLength(bp->promise_types); j++)
             {
-                SubType *sp = SeqAt(bp->subtypes, j);
+                PromiseType *sp = SeqAt(bp->promise_types, j);
 
                 for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
                 {
                     Promise *pp = SeqAt(sp->promises, ppi);
-                    ExpandPromise(AGENT_TYPE_MONITOR, scope, pp, KeepMonitorPromise, report_context);
+                    ExpandPromise(ctx, pp, KeepMonitorPromise, NULL);
                 }
             }
         }
+
+        EvalContextStackPopFrame(ctx);
     }
 
-    DeleteAllScope();
-    NewScope("const");
-    NewScope("control_monitor");
-    NewScope("control_common");
-    NewScope("mon");
-    NewScope("sys");
-    GetNameInfo3();
-    GetInterfacesInfo(AGENT_TYPE_MONITOR);
-    Get3Environment();
-    OSClasses();
-    BuiltinClasses();
+    ScopeDeleteAll();
+    GetNameInfo3(ctx, AGENT_TYPE_MONITOR);
+    GetInterfacesInfo(ctx, AGENT_TYPE_MONITOR);
+    Get3Environment(ctx, AGENT_TYPE_MONITOR);
+    OSClasses(ctx);
+    BuiltinClasses(ctx);
 }
 
 /*********************************************************************/
 /* Level                                                             */
 /*********************************************************************/
 
-static void KeepMonitorPromise(Promise *pp)
+static void KeepMonitorPromise(EvalContext *ctx, Promise *pp, ARG_UNUSED void *param)
 {
+    assert(param == NULL);
+
     char *sp = NULL;
 
-    if (!IsDefinedClass(pp->classes, pp->ns))
+    if (!IsDefinedClass(ctx, pp->classes, PromiseGetNamespace(pp)))
     {
-        CfOut(cf_verbose, "", "\n");
-        CfOut(cf_verbose, "", ". . . . . . . . . . . . . . . . . . . . . . . . . . . . \n");
-        CfOut(cf_verbose, "", "Skipping whole next promise (%s), as context %s is not relevant\n", pp->promiser,
-              pp->classes);
-        CfOut(cf_verbose, "", ". . . . . . . . . . . . . . . . . . . . . . . . . . . . \n");
+        if (LEGACY_OUTPUT)
+        {
+            Log(LOG_LEVEL_VERBOSE, "\n");
+            Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
+            Log(LOG_LEVEL_VERBOSE, "Skipping whole next promise (%s), as context %s is not relevant", pp->promiser,
+                  pp->classes);
+            Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
+        }
+        else
+        {
+            Log(LOG_LEVEL_VERBOSE, "Skipping next promise '%s', as context '%s' is not relevant", pp->promiser, pp->classes);
+        }
         return;
     }
 
-    if (VarClassExcluded(pp, &sp))
+    if (VarClassExcluded(ctx, pp, &sp))
     {
-        CfOut(cf_verbose, "", "\n");
-        CfOut(cf_verbose, "", ". . . . . . . . . . . . . . . . . . . . . . . . . . . . \n");
-        CfOut(cf_verbose, "", "Skipping whole next promise (%s), as var-context %s is not relevant\n", pp->promiser,
-              sp);
-        CfOut(cf_verbose, "", ". . . . . . . . . . . . . . . . . . . . . . . . . . . . \n");
+        if (LEGACY_OUTPUT)
+        {
+            Log(LOG_LEVEL_VERBOSE, "\n");
+            Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
+            Log(LOG_LEVEL_VERBOSE, "Skipping whole next promise (%s), as var-context %s is not relevant", pp->promiser,
+                  sp);
+            Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
+        }
+        else
+        {
+            Log(LOG_LEVEL_VERBOSE, "Skipping next promise '%s', as var-context '%s' is not relevant", pp->promiser,
+                  sp);
+        }
         return;
     }
 
-    if (strcmp("classes", pp->agentsubtype) == 0)
+    if (strcmp("classes", pp->parent_promise_type->name) == 0)
     {
-        KeepClassContextPromise(pp);
+        VerifyClassPromise(ctx, pp, NULL);
         return;
     }
 
-    if (strcmp("measurements", pp->agentsubtype) == 0)
+    if (strcmp("measurements", pp->parent_promise_type->name) == 0)
     {
-        VerifyMeasurementPromise(CF_THIS, pp);
-        *pp->donep = false;
+        VerifyMeasurementPromise(ctx, CF_THIS, pp);
+        /* FIXME: Verify why this explicit promise status change is done */
+        EvalContextMarkPromiseNotDone(ctx, pp);
         return;
     }
 }
-
-/*****************************************************************************/
-
-void MonOtherInit(void)
-{
-#ifdef HAVE_NOVA
-    Nova_MonOtherInit();
-#endif
-}
-
-/*********************************************************************/
-
-void MonOtherGatherData(double *cf_this)
-{
-#ifdef HAVE_NOVA
-    Nova_MonOtherGatherData(cf_this);
-#endif
-}
-
-#ifndef HAVE_NOVA
-static void HistoryUpdate(Averages newvals)
-{
-}
-#endif

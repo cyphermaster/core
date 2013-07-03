@@ -1,24 +1,23 @@
-/* 
+/*
+   Copyright (C) CFEngine AS
 
-   Copyright (C) Cfengine AS
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
    Free Software Foundation; version 3.
-   
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
-  You should have received a copy of the GNU General Public License  
+
+  You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -27,86 +26,68 @@
 
 #include "files_names.h"
 #include "files_interfaces.h"
-#include "cfstream.h"
 #include "pipes.h"
-#include "logging.h"
 #include "string_lib.h"
 #include "misc_lib.h"
 #include "generic_agent.h" // CloseLog
 
 /********************************************************************/
 
-int GetExecOutput(const char *command, char *buffer, int useshell)
+bool GetExecOutput(const char *command, char *buffer, ShellType shell)
 /* Buffer initially contains whole exec string */
 {
     int offset = 0;
-    char line[CF_EXPANDSIZE], *sp;
+    char line[CF_EXPANDSIZE];
     FILE *pp;
-    int flatten_newlines = false;
 
-    CfDebug("GetExecOutput(%s,%s) - use shell = %d\n", command, buffer, useshell);
-
-    if (useshell)
+    if (shell == SHELL_TYPE_USE)
     {
         pp = cf_popen_sh(command, "r");
     }
+    else if (shell == SHELL_TYPE_POWERSHELL)
+    {
+#ifdef __MINGW32__
+        pp = cf_popen_powershell(command, "r");
+#else // !__MINGW32__
+        Log(LOG_LEVEL_ERR, "Powershell is only supported on Windows");
+        return false;
+#endif // __MINGW32__
+    }
     else
     {
-        pp = cf_popen(command, "r");
+        pp = cf_popen(command, "r", true);
     }
 
     if (pp == NULL)
     {
-        CfOut(cf_error, "cf_popen", "Couldn't open pipe to command %s\n", command);
+        Log(LOG_LEVEL_ERR, "Couldn't open pipe to command '%s'. (cf_popen: %s)", command, GetErrorStr());
         return false;
     }
 
     memset(buffer, 0, CF_EXPANDSIZE);
 
-    while (!feof(pp))
+    for (;;)
     {
-        if (ferror(pp))         /* abortable */
+        ssize_t res = CfReadLine(line, CF_EXPANDSIZE, pp);
+        if (res == 0)
         {
-            fflush(pp);
             break;
         }
 
-        if (CfReadLine(line, CF_EXPANDSIZE, pp) == -1)
+        if (res == -1)
         {
-            FatalError("Error in CfReadLine");
-        }
-
-        if (ferror(pp))         /* abortable */
-        {
-            fflush(pp);
-            break;
-        }
-
-        if (flatten_newlines)
-        {
-            for (sp = line; *sp != '\0'; sp++)
-            {
-                if (*sp == '\n')
-                {
-                    *sp = ' ';
-                }
-            }
+            Log(LOG_LEVEL_ERR, "Unable to read output of command '%s'. (fread: %s)", command, GetErrorStr());
+            cf_pclose(pp);
+            return false;
         }
 
         if (strlen(line) + offset > CF_EXPANDSIZE - 10)
         {
-            CfOut(cf_error, "", "Buffer exceeded %d bytes in exec %s\n", CF_EXPANDSIZE, command);
+            Log(LOG_LEVEL_ERR, "Buffer exceeded %d bytes in exec '%s'", CF_EXPANDSIZE, command);
             break;
         }
 
-        if (flatten_newlines)
-        {
-            snprintf(buffer + offset, CF_EXPANDSIZE, "%s ", line);
-        }
-        else
-        {
-            snprintf(buffer + offset, CF_EXPANDSIZE, "%s\n", line);
-        }
+        snprintf(buffer + offset, CF_EXPANDSIZE, "%s\n", line);
 
         offset += strlen(line) + 1;
     }
@@ -115,11 +96,11 @@ int GetExecOutput(const char *command, char *buffer, int useshell)
     {
         if (Chop(buffer, CF_EXPANDSIZE) == -1)
         {
-            CfOut(cf_error, "", "Chop was called on a string that seemed to have no terminator");
+            Log(LOG_LEVEL_ERR, "Chop was called on a string that seemed to have no terminator");
         }
     }
 
-    CfDebug("GetExecOutput got: [%s]\n", buffer);
+    Log(LOG_LEVEL_DEBUG, "GetExecOutput got '%s'", buffer);
 
     cf_pclose(pp);
     return true;
@@ -145,12 +126,12 @@ void ActAsDaemon(int preserve)
     {
         if (dup2(fd, STDIN_FILENO) == -1)
         {
-            CfOut(cf_error, "dup2", "Could not dup");
+            Log(LOG_LEVEL_ERR, "Could not dup. (dup2: %s)", GetErrorStr());
         }
 
         if (dup2(fd, STDOUT_FILENO) == -1)
         {
-            CfOut(cf_error, "dup2", "Could not dup");
+            Log(LOG_LEVEL_ERR, "Could not dup. (dup2: %s)", GetErrorStr());
         }
 
         dup2(fd, STDERR_FILENO);

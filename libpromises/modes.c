@@ -1,31 +1,28 @@
-/* 
-   Copyright (C) Cfengine AS
+/*
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
    Free Software Foundation; version 3.
-   
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
-  You should have received a copy of the GNU General Public License  
+
+  You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
 #include "cf3.defs.h"
-
-#include "cfstream.h"
 
 /***************************************************************/
 
@@ -66,8 +63,6 @@ int ParseModeString(const char *modestring, mode_t *plusmask, mode_t *minusmask)
         return true;
     }
 
-    CfDebug("ParseModeString(%s)\n", modestring);
-
     gotaction = false;
 
     for (const char *sp = modestring; true; sp++)
@@ -103,7 +98,7 @@ int ParseModeString(const char *modestring, mode_t *plusmask, mode_t *minusmask)
         case '=':
             if (gotaction)
             {
-                CfOut(cf_error, "", "Too many +-= in mode string");
+                Log(LOG_LEVEL_ERR, "Too many +-= in mode string");
                 return false;
             }
 
@@ -164,7 +159,7 @@ int ParseModeString(const char *modestring, mode_t *plusmask, mode_t *minusmask)
                                    Any (POSIX)-constants ??
                                  */
             {
-                CfOut(cf_error, "", "Mode-Value too big : %s\n", modestring);
+                Log(LOG_LEVEL_ERR, "Mode-Value too big : %s", modestring);
                 return false;
             }
 
@@ -183,7 +178,7 @@ int ParseModeString(const char *modestring, mode_t *plusmask, mode_t *minusmask)
 
             if ((found_sort != unknown) && (found_sort != sort))
             {
-                CfOut(cf_inform, "", "Symbolic and numeric form for modes mixed");
+                Log(LOG_LEVEL_INFO, "Symbolic and numeric form for modes mixed");
             }
 
             found_sort = sort;
@@ -200,7 +195,7 @@ int ParseModeString(const char *modestring, mode_t *plusmask, mode_t *minusmask)
             {
                 if ((strcmp(modestring, "0000") != 0) && (strcmp(modestring, "000") != 0))
                 {
-                    CfOut(cf_error, "", "mode string is incomplete");
+                    Log(LOG_LEVEL_ERR, "mode string is incomplete");
                     return false;
                 }
             }
@@ -212,21 +207,21 @@ int ParseModeString(const char *modestring, mode_t *plusmask, mode_t *minusmask)
 
             if ((found_sort != unknown) && (found_sort != sort))
             {
-                CfOut(cf_inform, "", "Symbolic and numeric form for modes mixed");
+                Log(LOG_LEVEL_INFO, "Symbolic and numeric form for modes mixed");
             }
 
-            CfDebug("[PLUS=%" PRIoMAX "][MINUS=%" PRIoMAX "]\n", (uintmax_t)*plusmask, (uintmax_t)*minusmask);
+            Log(LOG_LEVEL_DEBUG, "Modestring [PLUS = %" PRIoMAX "] [MINUS = %" PRIoMAX "]", (uintmax_t)*plusmask, (uintmax_t)*minusmask);
             return true;
 
         default:
-            CfOut(cf_error, "", "Invalid mode string (%s)", modestring);
+            Log(LOG_LEVEL_ERR, "Invalid mode string (%s)", modestring);
             return false;
         }
     }
 
     if (!no_error)
     {
-        CfOut(cf_error, "", "Error validating mode string %s\n", modestring);
+        Log(LOG_LEVEL_ERR, "Error validating mode string %s", modestring);
     }
 
     return no_error;
@@ -239,13 +234,13 @@ static int CheckModeState(enum modestate stateA, enum modestate stateB, enum mod
 {
     if ((stateA != wild) && (stateB != wild) && (stateA != stateB))
     {
-        CfOut(cf_error, "", "Mode string constant (%c) used out of context", ch);
+        Log(LOG_LEVEL_ERR, "Mode string constant (%c) used out of context", ch);
         return false;
     }
 
     if ((sortA != unknown) && (sortB != unknown) && (sortA != sortB))
     {
-        CfOut(cf_error, "", "Symbolic and numeric filemodes mixed within expression");
+        Log(LOG_LEVEL_ERR, "Symbolic and numeric filemodes mixed within expression");
         return false;
     }
 
@@ -256,8 +251,6 @@ static int CheckModeState(enum modestate stateA, enum modestate stateB, enum mod
 
 static int SetModeMask(char action, int value, int affected, mode_t *p, mode_t *m)
 {
-    CfDebug("SetMask(%c%o,%o)\n", action, value, affected);
-
     switch (action)
     {
     case '+':
@@ -273,7 +266,7 @@ static int SetModeMask(char action, int value, int affected, mode_t *p, mode_t *
         *m |= ((~value) & 07777 & affected);
         return true;
     default:
-        CfOut(cf_error, "", "Mode directive %c is unknown", action);
+        Log(LOG_LEVEL_ERR, "Mode directive %c is unknown", action);
         return false;
     }
 }

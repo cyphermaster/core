@@ -1,12 +1,11 @@
-#include <setjmp.h>
-#include <sys/types.h>
-#include <stdarg.h>
+#include "test.h"
+#include "alloc.h"
 #include <stdlib.h>
 #include <string.h>
 #include "cmockery.h"
 #include "buffer.h"
 
-static void test_createBuffer(void **state)
+static void test_createBuffer(void)
 {
     Buffer *buffer = BufferNew();
     assert_true(buffer != NULL);
@@ -17,12 +16,13 @@ static void test_createBuffer(void **state)
     assert_int_equal(buffer->beginning, 0);
     assert_int_equal(buffer->end, 0);
     assert_true(buffer->ref_count != NULL);
-    assert_int_equal(buffer->ref_count->user_count, 1);    
+    assert_int_equal(buffer->ref_count->user_count, 1);
+    assert_int_equal(0, BufferDestroy(&buffer));
 }
 
-static void test_createBufferFrom(void **state)
+static void test_createBufferFrom(void)
 {
-    const char data[] = "this is some data";
+    char *data = xstrdup("this is some data");
     unsigned int dataLength = strlen(data);
     Buffer *buffer = BufferNewFrom(data, dataLength);
     assert_true(buffer != NULL);
@@ -35,9 +35,11 @@ static void test_createBufferFrom(void **state)
     assert_int_equal(buffer->end, 0);
     assert_true(buffer->ref_count != NULL);
     assert_int_equal(buffer->ref_count->user_count, 1);
+    assert_int_equal(0, BufferDestroy(&buffer));
+    free (data);
 }
 
-static void test_destroyBuffer(void **state)
+static void test_destroyBuffer(void)
 {
     Buffer *buffer = BufferNew();
     assert_int_equal(0, BufferDestroy(&buffer));
@@ -45,22 +47,19 @@ static void test_destroyBuffer(void **state)
     assert_int_equal(0, BufferDestroy(NULL));
 }
 
-static void test_setBuffer(void **state)
+static void test_setBuffer(void)
 {
-    char element0[] = "element0";
+    char *element0 = xstrdup("element0");
     unsigned int element0size = strlen(element0);
-    const char *element0pointer = NULL;
-    char element1[2 * DEFAULT_BUFFER_SIZE + 2];
+    char *element1 = (char *)xmalloc(2 * DEFAULT_BUFFER_SIZE + 2);
     unsigned int element1size = 2 * DEFAULT_BUFFER_SIZE + 1;
-    const char *element1pointer = NULL;
-    char element2[DEFAULT_MEMORY_CAP * 2];
+    char *element2 = (char *)xmalloc(DEFAULT_MEMORY_CAP * 2);
     unsigned int element2size = 2 * DEFAULT_MEMORY_CAP;
 
     Buffer *buffer = BufferNew();
     assert_true(buffer != NULL);
     // Smaller than the allocated buffer
     assert_int_equal(element0size, BufferSet(buffer, element0, element0size));
-    element0pointer = buffer->buffer;
     assert_int_equal(element0size, buffer->used);
     assert_int_equal(element0size, BufferSize(buffer));
     assert_string_equal(element0, buffer->buffer);
@@ -72,8 +71,6 @@ static void test_setBuffer(void **state)
         element1[i] = 'a';
     element1[element1size] = '\0';
     assert_int_equal(element1size, BufferSet(buffer, element1, element1size));
-    element1pointer = buffer->buffer;
-    assert_true(element0pointer != element1pointer);
     assert_int_equal(element1size, buffer->used);
     assert_string_equal(element1, buffer->buffer);
     assert_string_equal(element1, BufferData(buffer));
@@ -134,11 +131,17 @@ static void test_setBuffer(void **state)
      */
     assert_int_equal(0, BufferDestroy(&buffer));
     assert_true(buffer == NULL);
+    BufferDestroy(&bm1);
+    BufferDestroy(&be);
+    BufferDestroy(&bp1);
+    free (element0);
+    free (element1);
+    free (element2);
 }
 
-static void test_zeroBuffer(void **state)
+static void test_zeroBuffer(void)
 {
-    char element0[] = "element0";
+    char *element0 = xstrdup("element0");
     unsigned int element0size = strlen(element0);
     const char *element0pointer = NULL;
 
@@ -151,55 +154,70 @@ static void test_zeroBuffer(void **state)
     assert_int_equal(DEFAULT_BUFFER_SIZE, buffer->capacity);
     assert_int_equal(0, buffer->used);
     assert_int_equal(0, BufferSize(buffer));
+	const char *data = BufferData(buffer);
+	assert_string_equal(data, "");
     assert_true(element0pointer == buffer->buffer);
     BufferZero(NULL);
     assert_int_equal(0, BufferDestroy(&buffer));
+    /*
+     * Release the resources
+     */
+    BufferDestroy(&buffer);
+    free (element0);
 }
 
-static void test_copyEqualBuffer(void **state)
+static void test_copyCompareBuffer(void)
 {
-    char element0[] = "element0";
+    char *element0 = xstrdup("element0");
     unsigned int element0size = strlen(element0);
-    char element1[] = "element1";
+    char *element1 = xstrdup("element1");
     unsigned int element1size = strlen(element1);
 
-    Buffer *buffer0 = BufferNew();
-    Buffer *buffer1 = BufferNew();
-    Buffer *buffer2 = BufferNew();
+    Buffer *buffer0 = NULL;
+    Buffer *buffer1 = NULL;
+    Buffer *buffer2 = NULL;
 
-    // Empty buffers, all empty buffers are the same
-    assert_true(BufferEqual(buffer0, buffer0));
-    assert_true(BufferEqual(buffer0, buffer1));
+    assert_int_equal(0, BufferCompare(buffer0, buffer1));
+    buffer0 = BufferNew();
+    assert_int_equal(-1, BufferCompare(NULL, buffer0));
+    assert_int_equal(1, BufferCompare(buffer0, NULL));
+    buffer1 = BufferNew();
+    assert_int_equal(0, BufferCompare(buffer0, buffer0));
+    assert_int_equal(0, BufferCompare(buffer0, buffer1));
     assert_int_equal(0, BufferCopy(buffer0, &buffer2));
-    assert_true(BufferEqual(buffer0, buffer2));
+    assert_int_equal(0, BufferCompare(buffer0, buffer2));
 
     // Add some flavour
     assert_int_equal(0, BufferDestroy(&buffer2));
     assert_int_equal(element0size, BufferSet(buffer0, element0, element0size));
     assert_int_equal(element1size, BufferSet(buffer1, element1, element1size));
-    assert_true(BufferEqual(buffer0, buffer0));
-    assert_false(BufferEqual(buffer0, buffer1));
+    assert_int_equal(0, BufferCompare(buffer0, buffer0));
+    assert_int_equal(-1, BufferCompare(buffer0, buffer1));
+    assert_int_equal(1, BufferCompare(buffer1, buffer0));
     assert_int_equal(0, BufferCopy(buffer0, &buffer2));
-    assert_true(BufferEqual(buffer0, buffer2));
+    assert_int_equal(0, BufferCompare(buffer0, buffer2));
 
     // Destroy the buffers
     assert_int_equal(0, BufferDestroy(&buffer0));
     assert_int_equal(0, BufferDestroy(&buffer1));
     assert_int_equal(0, BufferDestroy(&buffer2));
+
+    free (element0);
+    free (element1);
 }
 
-static void test_appendBuffer(void **state)
+static void test_appendBuffer(void)
 {
-    char element0[] = "element0";
+    char *element0 = xstrdup("element0");
     unsigned int element0size = strlen(element0);
     const char *element0pointer = NULL;
-    char element1[] = "element1";
+    char *element1 = xstrdup("element1");
     unsigned int element1size = strlen(element1);
     const char *element1pointer = NULL;
-    char element2[2 * DEFAULT_BUFFER_SIZE + 2];
+    char *element2 = (char *)xmalloc(2 * DEFAULT_BUFFER_SIZE + 2);
     unsigned int element2size = 2 * DEFAULT_BUFFER_SIZE + 1;
     const char *element2pointer = NULL;
-    char element3[DEFAULT_MEMORY_CAP * 2];
+    char *element3 = (char *)xmalloc(DEFAULT_MEMORY_CAP * 2);
     unsigned int element3size = 2 * DEFAULT_MEMORY_CAP;
 
     Buffer *buffer = BufferNew();
@@ -219,7 +237,7 @@ static void test_appendBuffer(void **state)
     assert_int_equal(buffer->used, element0size + element1size);
     assert_int_equal(BufferSize(buffer), element0size + element1size);
     char *shortAppend = NULL;
-    shortAppend = (char *)malloc(element0size + element1size + 1);
+    shortAppend = (char *)xmalloc(element0size + element1size + 1);
     strcpy(shortAppend, element0);
     strcat(shortAppend, element1);
     assert_string_equal(shortAppend, buffer->buffer);
@@ -246,11 +264,10 @@ static void test_appendBuffer(void **state)
     element2[element2size] = '\0';
     assert_int_equal(element0size + element2size, BufferAppend(buffer, element2, element2size));
     element2pointer = buffer->buffer;
-    assert_true(element0pointer != element2pointer);
     assert_int_equal(buffer->used, element0size + element2size);
     assert_int_equal(BufferSize(buffer), element0size + element2size);
     char *longAppend = NULL;
-    longAppend = (char *)malloc(element0size + element2size + 1);
+    longAppend = (char *)xmalloc(element0size + element2size + 1);
     strcpy(longAppend, element0);
     strcat(longAppend, element2);
     assert_string_equal(longAppend, buffer->buffer);
@@ -307,28 +324,34 @@ static void test_appendBuffer(void **state)
     free(shortAppend);
     free(longAppend);
     assert_int_equal(0, BufferDestroy(&buffer));
-    assert_true(buffer == NULL);
+    assert_int_equal(0, BufferDestroy(&bm1));
+    assert_int_equal(0, BufferDestroy(&be));
+    assert_int_equal(0, BufferDestroy(&bp1));
+    free (element0);
+    free (element1);
+    free (element2);
+    free (element3);
 }
 
-static void test_printf(void **state)
+static void test_printf(void)
 {
-    char char0[] = "char0";
+    char *char0 = xstrdup("char0");
     unsigned int char0size = strlen(char0);
     const char *char0pointer = NULL;
-    char char1[] = "char1";
+    char *char1 = xstrdup("char1");
     unsigned int char1size = strlen(char1);
     const char *char1pointer = NULL;
-    char char2[2 * DEFAULT_BUFFER_SIZE + 2];
+    char *char2 = (char *)xmalloc(2 * DEFAULT_BUFFER_SIZE + 2);
     unsigned int char2size = 2 * DEFAULT_BUFFER_SIZE + 1;
     int int0 = 123456789;
-    char int0char[] = "123456789";
+    char *int0char = xstrdup("123456789");
     unsigned int int0charsize = strlen(int0char);
     double double0 = 3.1415;
-    char double0char[] = "3.1415";
+    char *double0char = xstrdup("3.1415");
     unsigned int double0charsize = strlen(double0char);
-    char char0int0char1double0[] = "char0 123456789 char1 3.1415";
+    char *char0int0char1double0 = xstrdup("char0 123456789 char1 3.1415");
     unsigned int char0int0char1double0size = strlen(char0int0char1double0);
-    char element3[DEFAULT_MEMORY_CAP * 2];
+    char *element3 = (char *)xmalloc(DEFAULT_MEMORY_CAP * 2);
     unsigned int element3size = 2 * DEFAULT_MEMORY_CAP;
 
     Buffer *buffer = BufferNew();
@@ -450,6 +473,20 @@ static void test_printf(void **state)
     assert_int_equal(bp1_size, BufferPrintf(bp1, "%s", buffer_p1));
     assert_string_equal(buffer_p1, bp1->buffer);
     assert_int_equal(bp1->capacity, 2 * DEFAULT_BUFFER_SIZE);
+    /*
+     * Release the resources
+     */
+    BufferDestroy(&buffer);
+    BufferDestroy(&bm1);
+    BufferDestroy(&be);
+    BufferDestroy(&bp1);
+    free (char0);
+    free (char1);
+    free (char2);
+    free (int0char);
+    free (double0char);
+    free (char0int0char1double0);
+    free (element3);
 }
 
 static int test_vprintf_helper(Buffer *buffer, char *fmt, ...)
@@ -462,25 +499,25 @@ static int test_vprintf_helper(Buffer *buffer, char *fmt, ...)
     return result;
 }
 
-static void test_vprintf(void **state)
+static void test_vprintf(void)
 {
-    char char0[] = "char0";
+    char *char0 = xstrdup("char0");
     unsigned int char0size = strlen(char0);
     const char *char0pointer = NULL;
-    char char1[] = "char1";
+    char *char1 = xstrdup("char1");
     unsigned int char1size = strlen(char1);
     const char *char1pointer = NULL;
-    char char2[2 * DEFAULT_BUFFER_SIZE + 2];
+    char *char2 = (char *)xmalloc(2 * DEFAULT_BUFFER_SIZE + 2);
     unsigned int char2size = 2 * DEFAULT_BUFFER_SIZE + 1;
     int int0 = 123456789;
-    char int0char[] = "123456789";
+    char *int0char = xstrdup("123456789");
     unsigned int int0charsize = strlen(int0char);
     double double0 = 3.1415;
-    char double0char[] = "3.1415";
+    char *double0char = xstrdup("3.1415");
     unsigned int double0charsize = strlen(double0char);
-    char char0int0char1double0[] = "char0 123456789 char1 3.1415";
+    char *char0int0char1double0 = xstrdup("char0 123456789 char1 3.1415");
     unsigned int char0int0char1double0size = strlen(char0int0char1double0);
-    char element3[DEFAULT_MEMORY_CAP * 2];
+    char *element3 = (char *)xmalloc(DEFAULT_MEMORY_CAP * 2);
     unsigned int element3size = 2 * DEFAULT_MEMORY_CAP;
 
     Buffer *buffer = BufferNew();
@@ -602,16 +639,32 @@ static void test_vprintf(void **state)
     assert_int_equal(bp1_size, test_vprintf_helper(bp1, "%s", buffer_p1));
     assert_string_equal(buffer_p1, bp1->buffer);
     assert_int_equal(bp1->capacity, 2 * DEFAULT_BUFFER_SIZE);
+    /*
+     * Release the resources
+     */
+    BufferDestroy(&buffer);
+    BufferDestroy(&bm1);
+    BufferDestroy(&be);
+    BufferDestroy(&bp1);
+    free (char0);
+    free (char1);
+    free (char2);
+    free (int0char);
+    free (double0char);
+    free (char0int0char1double0);
+    free (element3);
 }
 
 int main()
 {
-    const UnitTest tests[] = {
+    PRINT_TEST_BANNER();
+    const UnitTest tests[] =
+    {
         unit_test(test_createBuffer)
         , unit_test(test_createBufferFrom)
         , unit_test(test_destroyBuffer)
         , unit_test(test_zeroBuffer)
-        , unit_test(test_copyEqualBuffer)
+        , unit_test(test_copyCompareBuffer)
         , unit_test(test_setBuffer)
         , unit_test(test_appendBuffer)
         , unit_test(test_printf)

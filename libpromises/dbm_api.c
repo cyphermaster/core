@@ -1,8 +1,7 @@
 /*
+   Copyright (C) CFEngine AS
 
-   Copyright (C) Cfengine AS
-
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -18,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -27,15 +26,15 @@
 
 #include "dbm_api.h"
 #include "dbm_priv.h"
-#include "dbm_lib.h"
 #include "dbm_migration.h"
 #include "atexit.h"
-#include "cfstream.h"
 #include "logging.h"
+#include "misc_lib.h"
 
-#include <assert.h>
 
-/******************************************************************************/
+static int DBPathLock(const char *filename);
+static void DBPathUnLock(int fd);
+static void DBPathMoveBroken(const char *filename);
 
 struct DBHandle_
 {
@@ -96,15 +95,15 @@ static const char *DB_PATHS[] = {
 
 /******************************************************************************/
 
-static char *DBIdToPath(dbid id)
+char *DBIdToPath(const char *workdir, dbid id)
 {
     assert(DB_PATHS[id] != NULL);
 
     char *filename;
     if (xasprintf(&filename, "%s/%s.%s",
-                  CFWORKDIR, DB_PATHS[id], DBPrivGetFileExtension()) == -1)
+                  workdir, DB_PATHS[id], DBPrivGetFileExtension()) == -1)
     {
-        FatalError("Unable to construct database filename for file %s", DB_PATHS[id]);
+        ProgrammingError("Unable to construct database filename for file %s", DB_PATHS[id]);
     }
 
     char *native_filename = MapNameCopy(filename);
@@ -121,7 +120,7 @@ static DBHandle *DBHandleGet(int id)
 
     if (db_handles[id].filename == NULL)
     {
-        db_handles[id].filename = DBIdToPath(id);
+        db_handles[id].filename = DBIdToPath(CFWORKDIR, id);
         pthread_mutex_init(&db_handles[id].lock, NULL);
     }
 
@@ -157,8 +156,7 @@ static void CloseAllDB(void)
             if (ret != 0)
             {
                 errno = ret;
-                CfOut(cf_error, "pthread_mutex_destroy",
-                      "Unable to close database %s", DB_PATHS[i]);
+                Log(LOG_LEVEL_ERR, "Unable to close database '%s'. (pthread_mutex_destroy: %s)", DB_PATHS[i], GetErrorStr());
             }
         }
     }
@@ -166,9 +164,56 @@ static void CloseAllDB(void)
     pthread_mutex_unlock(&db_handles_lock);
 }
 
+/**
+ * @brief Wait for all users of all databases to close the DBs. Then acquire
+ * the mutexes *AND KEEP THEM LOCKED* so that no background thread can open
+ * any database. So make sure you exit soon...
+
+ * @warning This is usually register with atexit(), however you have to make
+ * sure no other DB-cleaning exit hook was registered before, so that this is
+ * called last.
+ **/
+void CloseAllDBExit()
+{
+    pthread_mutex_lock(&db_handles_lock);
+
+    for (int i = 0; i < dbid_max; i++)
+    {
+        if (db_handles[i].filename)
+        {
+            /* Wait until all DB users are served, or a threshold is reached */
+            int count = 0;
+            pthread_mutex_lock(&db_handles[i].lock);
+            while (db_handles[i].refcount > 0 && count < 1000)
+            {
+                pthread_mutex_unlock(&db_handles[i].lock);
+
+                struct timespec sleeptime = {
+                    .tv_sec = 0,
+                    .tv_nsec = 10000000                         /* 10 ms */
+                };
+                nanosleep(&sleeptime, NULL);
+                count++;
+
+                pthread_mutex_lock(&db_handles[i].lock);
+            }
+            /* Keep mutex locked. */
+
+            /* If we exited because of timeout make sure we Log() it. */
+            if (db_handles[i].refcount != 0)
+            {
+                Log(LOG_LEVEL_ERR,
+                    "Database %s refcount is still not zero (%d), forcing CloseDB()!",
+                    db_handles[i].filename, db_handles[i].refcount);
+                DBPrivCloseDB(db_handles[i].priv);
+            }
+        }
+    }
+}
+
 static void RegisterShutdownHandler(void)
 {
-    RegisterAtExitFunction(&CloseAllDB);
+    RegisterAtExitFunction(&CloseAllDBExit);
 }
 
 bool OpenDB(DBHandle **dbp, dbid id)
@@ -184,6 +229,17 @@ bool OpenDB(DBHandle **dbp, dbid id)
         if(lock_fd != -1)
         {
             handle->priv = DBPrivOpenDB(handle->filename);
+
+            if (handle->priv == DB_PRIV_DATABASE_BROKEN)
+            {
+                DBPathMoveBroken(handle->filename);
+                handle->priv = DBPrivOpenDB(handle->filename);
+                if (handle->priv == DB_PRIV_DATABASE_BROKEN)
+                {
+                    handle->priv = NULL;
+                }
+            }
+
             DBPathUnLock(lock_fd);
         }
 
@@ -225,7 +281,7 @@ void CloseDB(DBHandle *handle)
 
     if (handle->refcount < 1)
     {
-        CfOut(cf_error, "", "Trying to close database %s which is not open", handle->filename);
+        Log(LOG_LEVEL_ERR, "Trying to close database %s which is not open", handle->filename);
     }
     else if (--handle->refcount == 0)
     {
@@ -292,7 +348,7 @@ bool NewDBCursor(DBHandle *handle, DBCursor **cursor)
     return true;
 }
 
-bool NextDB(DBHandle *handle, DBCursor *cursor, char **key, int *ksize,
+bool NextDB(DBCursor *cursor, char **key, int *ksize,
             void **value, int *vsize)
 {
     return DBPrivAdvanceCursor(cursor->cursor, (void **)key, ksize, value, vsize);
@@ -308,9 +364,63 @@ bool DBCursorWriteEntry(DBCursor *cursor, const void *value, int value_size)
     return DBPrivWriteCursorEntry(cursor->cursor, value, value_size);
 }
 
-bool DeleteDBCursor(DBHandle *handle, DBCursor *cursor)
+bool DeleteDBCursor(DBCursor *cursor)
 {
     DBPrivCloseCursor(cursor->cursor);
     free(cursor);
     return true;
+}
+
+static int DBPathLock(const char *filename)
+{
+    char *filename_lock;
+    if (xasprintf(&filename_lock, "%s.lock", filename) == -1)
+    {
+        ProgrammingError("Unable to construct lock database filename for file %s", filename);
+    }
+
+    int fd = open(filename_lock, O_CREAT | O_RDWR, 0666);
+
+    if(fd == -1)
+    {
+        Log(LOG_LEVEL_ERR, "Unable to open database lock file '%s'. (flock: %s)", filename_lock, GetErrorStr());
+        free(filename_lock);
+        return -1;
+    }
+
+    if (ExclusiveLockFile(fd) == -1)
+    {
+        Log(LOG_LEVEL_ERR, "Unable to lock database lock file '%s'. (fcntl(F_SETLK): %s)", filename_lock, GetErrorStr());
+        free(filename_lock);
+        close(fd);
+        return -1;
+    }
+
+    free(filename_lock);
+
+    return fd;
+}
+
+static void DBPathUnLock(int fd)
+{
+    if(ExclusiveUnlockFile(fd) != 0)
+    {
+        Log(LOG_LEVEL_ERR, "Could not close db lock-file. (close: %s)", GetErrorStr());
+    }
+}
+
+static void DBPathMoveBroken(const char *filename)
+{
+    char *filename_broken;
+    if (xasprintf(&filename_broken, "%s.broken", filename) == -1)
+    {
+        ProgrammingError("Unable to construct broken database filename for file '%s'", filename);
+    }
+
+    if(rename(filename, filename_broken) != 0)
+    {
+        Log(LOG_LEVEL_ERR, "Failed moving broken db out of the way");
+    }
+
+    free(filename_broken);
 }

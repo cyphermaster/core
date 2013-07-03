@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,21 +17,20 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
 
 #include "cf3.defs.h"
 
-#include "cf_acl.h"
+#include "verify_acl.h"
 #include "acl_posix.h"
 #include "promises.h"
 #include "files_names.h"
-#include "cfstream.h"
-#include "logging.h"
 #include "misc_lib.h"
 #include "rlist.h"
+#include "env_context.h"
 
 #ifdef HAVE_ACL_H
 # include <acl.h>
@@ -47,13 +46,13 @@
 
 #ifdef HAVE_LIBACL
 
-static int CheckPosixLinuxAccessACEs(Rlist *aces, enum cf_acl_method method, char *file_path, Attributes a, Promise *pp);
-static int CheckPosixLinuxInheritACEs(Rlist *aces, enum cf_acl_method method, enum cf_acl_inherit directory_inherit,
-                                    char *file_path, Attributes a, Promise *pp);
-static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *file_path, acl_type_t acl_type, Attributes a,
+static int CheckPosixLinuxAccessACEs(EvalContext *ctx, Rlist *aces, AclMethod method, char *file_path, Attributes a, Promise *pp);
+static int CheckPosixLinuxDefaultACEs(EvalContext *ctx, Rlist *aces, AclMethod method, AclDefault acl_default,
+                                      char *file_path, Attributes a, Promise *pp);
+static int CheckPosixLinuxACEs(EvalContext *ctx, Rlist *aces, AclMethod method, char *file_path, acl_type_t acl_type, Attributes a,
                              Promise *pp);
-static int CheckDefaultEqualsAccessACL(char *file_path, Attributes a, Promise *pp);
-static int CheckDefaultClearACL(char *file_path, Attributes a, Promise *pp);
+static int CheckDefaultEqualsAccessACL(EvalContext *ctx, char *file_path, Attributes a, Promise *pp);
+static int CheckDefaultClearACL(EvalContext *ctx, char *file_path, Attributes a, Promise *pp);
 static int ParseEntityPosixLinux(char **str, acl_entry_t ace, int *is_mask);
 static int ParseModePosixLinux(char *mode, acl_permset_t old_perms);
 static acl_entry_t FindACE(acl_t acl, acl_entry_t ace_find);
@@ -62,62 +61,61 @@ static int ACECount(acl_t acl);
 static int PermsetEquals(acl_permset_t first, acl_permset_t second);
 
 
-int CheckPosixLinuxACL(char *file_path, Acl acl, Attributes a, Promise *pp)
+int CheckPosixLinuxACL(EvalContext *ctx, char *file_path, Acl acl, Attributes a, Promise *pp)
 {
-    if (!CheckPosixLinuxAccessACEs(acl.acl_entries, acl.acl_method, file_path, a, pp))
+    if (!CheckPosixLinuxAccessACEs(ctx, acl.acl_entries, acl.acl_method, file_path, a, pp))
     {
-        cfPS(cf_error, CF_FAIL, "", pp, a, " !! Failed checking access ACL on %s", file_path);
-        PromiseRef(cf_error, pp);
+        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, "Failed checking access ACL on %s", file_path);
+        PromiseRef(LOG_LEVEL_ERR, pp);
         return false;
     }
 
     if (IsDir(file_path))
     {
-        if (!CheckPosixLinuxInheritACEs
-            (acl.acl_inherit_entries, acl.acl_method, acl.acl_directory_inherit, file_path, a, pp))
+        if (!CheckPosixLinuxDefaultACEs(ctx, acl.acl_default_entries, acl.acl_method, acl.acl_default, file_path, a, pp))
         {
-            cfPS(cf_error, CF_FAIL, "", pp, a, " !! Failed checking inheritance ACL on %s", file_path);
-            PromiseRef(cf_error, pp);
+            cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, "Failed checking default ACL on '%s'", file_path);
+            PromiseRef(LOG_LEVEL_ERR, pp);
             return false;
         }
     }
     return true;
 }
 
-static int CheckPosixLinuxAccessACEs(Rlist *aces, enum cf_acl_method method, char *file_path, Attributes a, Promise *pp)
+static int CheckPosixLinuxAccessACEs(EvalContext *ctx, Rlist *aces, AclMethod method, char *file_path, Attributes a, Promise *pp)
 {
-    return CheckPosixLinuxACEs(aces, method, file_path, ACL_TYPE_ACCESS, a, pp);
+    return CheckPosixLinuxACEs(ctx, aces, method, file_path, ACL_TYPE_ACCESS, a, pp);
 }
 
-static int CheckPosixLinuxInheritACEs(Rlist *aces, enum cf_acl_method method, enum cf_acl_inherit directory_inherit,
-                                    char *file_path, Attributes a, Promise *pp)
+static int CheckPosixLinuxDefaultACEs(EvalContext *ctx, Rlist *aces, AclMethod method, AclDefault acl_default,
+                                      char *file_path, Attributes a, Promise *pp)
 {
     int result;
 
-    switch (directory_inherit)
+    switch (acl_default)
     {
-    case cfacl_nochange:       // no change always succeeds
+    case ACL_DEFAULT_NO_CHANGE:       // no change always succeeds
 
         result = true;
         break;
 
-    case cfacl_specify:        // default ALC is specified in promise
+    case ACL_DEFAULT_SPECIFY:        // default ALC is specified in promise
 
-        result = CheckPosixLinuxACEs(aces, method, file_path, ACL_TYPE_DEFAULT, a, pp);
+        result = CheckPosixLinuxACEs(ctx, aces, method, file_path, ACL_TYPE_DEFAULT, a, pp);
         break;
 
-    case cfacl_parent:         // default ACL should be the same as access ACL
+    case ACL_DEFAULT_ACCESS:         // default ACL should be the same as access ACL
 
-        result = CheckDefaultEqualsAccessACL(file_path, a, pp);
+        result = CheckDefaultEqualsAccessACL(ctx, file_path, a, pp);
         break;
 
-    case cfacl_clear:          // default ALC should be empty
+    case ACL_DEFAULT_CLEAR:          // default ALC should be empty
 
-        result = CheckDefaultClearACL(file_path, a, pp);
+        result = CheckDefaultClearACL(ctx, file_path, a, pp);
         break;
 
     default:                   // unknown inheritance policy
-        CfOut(cf_error, "", "!! Unknown inheritance policy - shouldn't happen");
+        Log(LOG_LEVEL_ERR, "Unknown inheritance policy - shouldn't happen");
         result = false;
         break;
     }
@@ -126,13 +124,13 @@ static int CheckPosixLinuxInheritACEs(Rlist *aces, enum cf_acl_method method, en
 }
 
 /*
-   Takes as input Cfengine-syntax ACEs and a path to a file.
-   Checks if the Cfengine-syntax ACL translates to the POSIX Linux ACL
+   Takes as input CFEngine-syntax ACEs and a path to a file.
+   Checks if the CFEngine-syntax ACL translates to the POSIX Linux ACL
    set on the given file. If it doesn't, the ACL on the file is updated.
 */
 
-static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *file_path, acl_type_t acl_type, Attributes a,
-                             Promise *pp)
+static int CheckPosixLinuxACEs(EvalContext *ctx, Rlist *aces, AclMethod method, char *file_path, acl_type_t acl_type, Attributes a,
+                               Promise *pp)
 {
     acl_t acl_existing;
     acl_t acl_new;
@@ -157,7 +155,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
     if ((acl_existing = acl_get_file(file_path, acl_type)) == NULL)
     {
-        CfOut(cf_verbose, "acl_get_file", "No ACL for %s could be read", file_path);
+        Log(LOG_LEVEL_VERBOSE, "No ACL for '%s' could be read. (acl_get_file: %s)", file_path, GetErrorStr());
         return false;
     }
 
@@ -165,14 +163,14 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
     if ((acl_tmp = acl_init(1)) == NULL)
     {
-        CfOut(cf_error, "acl_init", "New ACL could not be allocated.");
+        Log(LOG_LEVEL_ERR, "New ACL could not be allocated (acl_init: %s)", GetErrorStr());
         acl_free((void *) acl_existing);
         return false;
     }
 
     if (acl_create_entry(&acl_tmp, &ace_parsed) != 0)
     {
-        CfOut(cf_error, "acl_init", "New ACL could not be allocated.");
+        Log(LOG_LEVEL_ERR, "New ACL could not be allocated (acl_create_entry: %s)", GetErrorStr());
         acl_free((void *) acl_existing);
         acl_free((void *) acl_tmp);
         return false;
@@ -180,11 +178,11 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
 // copy existing aces if we are appending
 
-    if (method == cfacl_append)
+    if (method == ACL_METHOD_APPEND)
     {
         if ((acl_new = acl_dup(acl_existing)) == NULL)
         {
-            CfOut(cf_error, "acl_dup", "Error copying existing ACL");
+            Log(LOG_LEVEL_ERR, "Error copying existing ACL (acl_dup: %s)", GetErrorStr());
             acl_free((void *) acl_existing);
             acl_free((void *) acl_tmp);
             return false;
@@ -194,7 +192,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
     {
         if ((acl_new = acl_init(5)) == NULL)    // TODO: Always OK with 5 here ?
         {
-            CfOut(cf_error, "acl_init", "New ACL could not be allocated.");
+            Log(LOG_LEVEL_ERR, "New ACL could not be allocated (acl_init: %s)", GetErrorStr());
             acl_free((void *) acl_existing);
             acl_free((void *) acl_tmp);
             return false;
@@ -207,7 +205,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
         if (!ParseEntityPosixLinux(&cf_ace, ace_parsed, &has_mask))
         {
-            CfOut(cf_error, "", "!! Error parsing entity in 'cf_ace'.");
+            Log(LOG_LEVEL_ERR, "Error parsing entity in 'cf_ace'.");
             acl_free((void *) acl_existing);
             acl_free((void *) acl_tmp);
             acl_free((void *) acl_new);
@@ -224,7 +222,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
         {
             if (acl_create_entry(&acl_new, &ace_current) != 0)
             {
-                CfOut(cf_error, "acl_create_entry", "Failed to allocate ace");
+                Log(LOG_LEVEL_ERR, "Failed to allocate ace (acl_create_entry: %s)", GetErrorStr());
                 acl_free((void *) acl_existing);
                 acl_free((void *) acl_tmp);
                 acl_free((void *) acl_new);
@@ -235,7 +233,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
             if (acl_copy_entry(ace_current, ace_parsed) != 0)
             {
-                CfOut(cf_error, "acl_copy_entry", "Error copying Linux entry in 'cf_ace'");
+                Log(LOG_LEVEL_ERR, "Error copying Linux entry in 'cf_ace' (acl_copy_entry: %s)", GetErrorStr());
                 acl_free((void *) acl_existing);
                 acl_free((void *) acl_tmp);
                 acl_free((void *) acl_new);
@@ -246,7 +244,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
             // loop iteration to be taken into account when applying mode below
             if ((acl_get_permset(ace_current, &perms) != 0))
             {
-                CfOut(cf_error, "acl_get_permset", "!! Error obtaining permset for 'ace_current'");
+                Log(LOG_LEVEL_ERR, "Error obtaining permset for 'ace_current' (acl_get_permset: %s)", GetErrorStr());
                 acl_free((void *) acl_existing);
                 acl_free((void *) acl_tmp);
                 acl_free((void *) acl_new);
@@ -255,7 +253,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
             if (acl_clear_perms(perms) != 0)
             {
-                CfOut(cf_error, "acl_clear_perms", "!! Error clearing permset for 'ace_current'");
+                Log(LOG_LEVEL_ERR, "Error clearing permset for 'ace_current'. (acl_clear_perms: %s)", GetErrorStr());
                 acl_free((void *) acl_existing);
                 acl_free((void *) acl_tmp);
                 acl_free((void *) acl_new);
@@ -267,7 +265,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
         if (*cf_ace != ':')
         {
-            CfOut(cf_error, "", "!! No separator before mode-string in 'cf_ace'");
+            Log(LOG_LEVEL_ERR, "No separator before mode-string in 'cf_ace'");
             acl_free((void *) acl_existing);
             acl_free((void *) acl_tmp);
             acl_free((void *) acl_new);
@@ -278,7 +276,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
         if (acl_get_permset(ace_current, &perms) != 0)
         {
-            CfOut(cf_error, "", "!! Error obtaining permset for 'cf_ace'");
+            Log(LOG_LEVEL_ERR, "Error obtaining permset for 'cf_ace'");
             acl_free((void *) acl_existing);
             acl_free((void *) acl_tmp);
             acl_free((void *) acl_new);
@@ -287,7 +285,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
         if (!ParseModePosixLinux(cf_ace, perms))
         {
-            CfOut(cf_error, "", "!! Error parsing mode-string in 'cf_ace'");
+            Log(LOG_LEVEL_ERR, "Error parsing mode-string in 'cf_ace'");
             acl_free((void *) acl_existing);
             acl_free((void *) acl_tmp);
             acl_free((void *) acl_new);
@@ -303,7 +301,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
     {
         if (acl_calc_mask(&acl_new) != 0)
         {
-            CfOut(cf_error, "", "!! Error calculating new acl mask");
+            Log(LOG_LEVEL_ERR, "Error calculating new acl mask");
             acl_free((void *) acl_existing);
             acl_free((void *) acl_tmp);
             acl_free((void *) acl_new);
@@ -313,7 +311,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
 
     if ((retv = ACLEquals(acl_existing, acl_new)) == -1)
     {
-        CfOut(cf_error, "", "!! Error while comparing existing and new ACL, unable to repair.");
+        Log(LOG_LEVEL_ERR, "Error while comparing existing and new ACL, unable to repair.");
         acl_free((void *) acl_existing);
         acl_free((void *) acl_tmp);
         acl_free((void *) acl_new);
@@ -327,7 +325,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
         {
         case cfa_warn:
 
-            cfPS(cf_error, CF_WARN, "", pp, a, " !! %s ACL on file '%s' needs to be updated", acl_type_str, file_path);
+            cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a, "%s ACL on file '%s' needs to be updated", acl_type_str, file_path);
             break;
 
         case cfa_fix:
@@ -336,7 +334,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
             {
                 if ((retv = acl_set_file(file_path, acl_type, acl_new)) != 0)
                 {
-                    CfOut(cf_error, "", "!! Error setting new %s ACL on file '%s' (are required ACEs present?)",
+                    Log(LOG_LEVEL_ERR, "Error setting new %s ACL on file '%s' (are required ACEs present?)",
                           acl_type_str, file_path);
                     acl_free((void *) acl_existing);
                     acl_free((void *) acl_tmp);
@@ -345,18 +343,18 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
                 }
             }
 
-            cfPS(cf_inform, CF_CHG, "", pp, a, "-> %s ACL on \"%s\" successfully changed.", acl_type_str, file_path);
+            cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "%s ACL on '%s' successfully changed.", acl_type_str, file_path);
 
             break;
 
         default:
-            ProgrammingError("Cfengine: internal error: illegal file action\n");
+            ProgrammingError("CFEngine: internal error: illegal file action");
         }
 
     }
     else
     {
-        cfPS(cf_inform, CF_NOP, "", pp, a, "-> %s ACL on \"%s\" needs no modification.", acl_type_str, file_path);
+        cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_NOOP, pp, a, "'%s' ACL on '%s' needs no modification.", acl_type_str, file_path);
     }
 
     acl_free((void *) acl_existing);
@@ -371,7 +369,7 @@ static int CheckPosixLinuxACEs(Rlist *aces, enum cf_acl_method method, char *fil
   Returns 0 on success and -1 on failure.
  */
 
-static int CheckDefaultEqualsAccessACL(char *file_path, Attributes a, Promise *pp)
+static int CheckDefaultEqualsAccessACL(EvalContext *ctx, char *file_path, Attributes a, Promise *pp)
 {
     acl_t acl_access;
     acl_t acl_default;
@@ -383,7 +381,7 @@ static int CheckDefaultEqualsAccessACL(char *file_path, Attributes a, Promise *p
 
     if ((acl_access = acl_get_file(file_path, ACL_TYPE_ACCESS)) == NULL)
     {
-        CfOut(cf_error, "acl_get_file", "Could not find an ACL for %s", file_path);
+        Log(LOG_LEVEL_ERR, "Could not find an ACL for '%s'. (acl_get_file: %s)", file_path, GetErrorStr());
         return false;
     }
 
@@ -391,7 +389,7 @@ static int CheckDefaultEqualsAccessACL(char *file_path, Attributes a, Promise *p
 
     if (acl_default == NULL)
     {
-        CfOut(cf_error, "acl_get_file", "Could not find default ACL for %s", file_path);
+        Log(LOG_LEVEL_ERR, "Could not find default ACL for '%s'. (acl_get_file: %s)", file_path, GetErrorStr());
         acl_free(acl_access);
         return false;
     }
@@ -401,7 +399,7 @@ static int CheckDefaultEqualsAccessACL(char *file_path, Attributes a, Promise *p
     switch (equals)
     {
     case 0:                    // they equal, as desired
-        cfPS(cf_inform, CF_NOP, "", pp, a, "-> Default ACL on \"%s\" needs no modification.", file_path);
+        cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_NOOP, pp, a, "Default ACL on '%s' needs no modification.", file_path);
         result = true;
         break;
 
@@ -411,7 +409,7 @@ static int CheckDefaultEqualsAccessACL(char *file_path, Attributes a, Promise *p
         {
         case cfa_warn:
 
-            cfPS(cf_error, CF_WARN, "", pp, a, " !! Default ACL on \"%s\" needs to be copied from access ACL.",
+            cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a, "Default ACL on '%s' needs to be copied from access ACL.",
                  file_path);
             break;
 
@@ -421,21 +419,21 @@ static int CheckDefaultEqualsAccessACL(char *file_path, Attributes a, Promise *p
             {
                 if ((acl_set_file(file_path, ACL_TYPE_DEFAULT, acl_access)) != 0)
                 {
-                    CfOut(cf_error, "", "!! Could not set default ACL to access");
+                    Log(LOG_LEVEL_ERR, "Could not set default ACL to access");
                     acl_free(acl_access);
                     acl_free(acl_default);
                     return false;
                 }
             }
 
-            cfPS(cf_inform, CF_CHG, "", pp, a, "-> Default ACL on \"%s\" successfully copied from access ACL.",
+            cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Default ACL on '%s' successfully copied from access ACL.",
                  file_path);
             result = true;
 
             break;
 
         default:
-            ProgrammingError("Cfengine: internal error: illegal file action\n");
+            ProgrammingError("CFEngine: internal error: illegal file action");
             result = false;
         }
 
@@ -443,7 +441,7 @@ static int CheckDefaultEqualsAccessACL(char *file_path, Attributes a, Promise *p
 
     default:
         result = false;
-        CfOut(cf_error, "", "!! Unable to compare access and default ACEs");
+        Log(LOG_LEVEL_ERR, "Unable to compare access and default ACEs");
     }
 
     acl_free(acl_access);
@@ -455,7 +453,7 @@ static int CheckDefaultEqualsAccessACL(char *file_path, Attributes a, Promise *p
   Checks if the default ACL is empty. If not, it is cleared.
 */
 
-int CheckDefaultClearACL(char *file_path, Attributes a, Promise *pp)
+int CheckDefaultClearACL(EvalContext *ctx, char *file_path, Attributes a, Promise *pp)
 {
     acl_t acl_existing;
     acl_t acl_empty;
@@ -468,7 +466,7 @@ int CheckDefaultClearACL(char *file_path, Attributes a, Promise *pp)
 
     if ((acl_existing = acl_get_file(file_path, ACL_TYPE_DEFAULT)) == NULL)
     {
-        CfOut(cf_error, "acl_get_file", "Unable to read default acl for %s", file_path);
+        Log(LOG_LEVEL_ERR, "Unable to read default acl for '%s'. (acl_get_file: %s)", file_path, GetErrorStr());
         return false;
     }
 
@@ -477,12 +475,12 @@ int CheckDefaultClearACL(char *file_path, Attributes a, Promise *pp)
     switch (retv)
     {
     case -1:
-        CfOut(cf_verbose, "acl_get_entry", "Couldn't retrieve ACE for %s", file_path);
+        Log(LOG_LEVEL_VERBOSE, "Couldn't retrieve ACE for '%s'. (acl_get_entry: %s)", file_path, GetErrorStr());
         result = false;
         break;
 
     case 0:                    // no entries, as desired
-        cfPS(cf_inform, CF_NOP, "", pp, a, "-> Default ACL on \"%s\" needs no modification.", file_path);
+        cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_NOOP, pp, a, "Default ACL on '%s' needs no modification.", file_path);
         result = true;
         break;
 
@@ -490,7 +488,7 @@ int CheckDefaultClearACL(char *file_path, Attributes a, Promise *pp)
 
         if ((acl_empty = acl_init(0)) == NULL)
         {
-            CfOut(cf_error, "", "Could not reinitialize ACL for %s", file_path);
+            Log(LOG_LEVEL_ERR, "Could not reinitialize ACL for '%s'. (acl_init: %s)", file_path, GetErrorStr());
             result = false;
             break;
         }
@@ -499,7 +497,7 @@ int CheckDefaultClearACL(char *file_path, Attributes a, Promise *pp)
         {
         case cfa_warn:
 
-            cfPS(cf_error, CF_WARN, "", pp, a, " !! Default ACL on \"%s\" needs to be cleared", file_path);
+            cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a, "Default ACL on '%s' needs to be cleared", file_path);
             break;
 
         case cfa_fix:
@@ -508,19 +506,19 @@ int CheckDefaultClearACL(char *file_path, Attributes a, Promise *pp)
             {
                 if (acl_set_file(file_path, ACL_TYPE_DEFAULT, acl_empty) != 0)
                 {
-                    CfOut(cf_error, "", "Could not reset ACL for %s", file_path);
+                    Log(LOG_LEVEL_ERR, "Could not reset ACL for %s", file_path);
                     result = false;
                     break;
                 }
             }
 
-            cfPS(cf_inform, CF_CHG, "", pp, a, "-> Default ACL on \"%s\" successfully cleared", file_path);
+            cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Default ACL on '%s' successfully cleared", file_path);
             result = true;
 
             break;
 
         default:
-            ProgrammingError("Cfengine: internal error: illegal file action\n");
+            ProgrammingError("CFEngine: internal error: illegal file action");
             result = false;
         }
 
@@ -558,7 +556,7 @@ static acl_entry_t FindACE(acl_t acl, acl_entry_t ace_find)
 
     if (more_aces == -1)
     {
-        CfOut(cf_error, "acl_get_entry", "Error reading acl");
+        Log(LOG_LEVEL_ERR, "Error reading acl. (acl_get_entry: %s)", GetErrorStr());
         return NULL;
     }
     else if (more_aces == 0)
@@ -570,7 +568,7 @@ static acl_entry_t FindACE(acl_t acl, acl_entry_t ace_find)
 
     if (acl_get_tag_type(ace_find, &tag_find) != 0)
     {
-        CfOut(cf_error, "acl_tag_type", "Error reading tag type");
+        Log(LOG_LEVEL_ERR, "Error reading tag type. (acl_get_tag_type: %s)", GetErrorStr());
         return NULL;
     }
 
@@ -580,7 +578,7 @@ static acl_entry_t FindACE(acl_t acl, acl_entry_t ace_find)
 
         if (id_find == NULL)
         {
-            CfOut(cf_error, "acl_get_qualifier", "Error reading tag type");
+            Log(LOG_LEVEL_ERR, "Error reading tag type. (acl_get_qualifier: %s)", GetErrorStr());
             return NULL;
         }
     }
@@ -591,7 +589,7 @@ static acl_entry_t FindACE(acl_t acl, acl_entry_t ace_find)
     {
         if ((retv_tag = acl_get_tag_type(ace_curr, &tag_curr)) != 0)
         {
-            CfOut(cf_error, "acl_get_tag_type", "Unable to get tag type");
+            Log(LOG_LEVEL_ERR, "Unable to get tag type. (acl_get_tag_type: %s)", GetErrorStr());
             acl_free(id_find);
             return NULL;
         }
@@ -607,7 +605,7 @@ static acl_entry_t FindACE(acl_t acl, acl_entry_t ace_find)
 
             if (id_curr == NULL)
             {
-                CfOut(cf_error, "acl_get_qualifier", "!! Couldn't extract qualifier");
+                Log(LOG_LEVEL_ERR, "Couldn't extract qualifier. (acl_get_qualifier: %s)", GetErrorStr());
                 return NULL;
             }
 
@@ -651,13 +649,13 @@ static int ACLEquals(acl_t first, acl_t second)
 
     if ((first_cnt = ACECount(first)) == -1)
     {
-        CfOut(cf_verbose, "", "Couldn't count ACEs");
+        Log(LOG_LEVEL_VERBOSE, "Couldn't count ACEs");
         return -1;
     }
 
     if ((second_cnt = ACECount(second)) == -1)
     {
-        CfOut(cf_verbose, "", "Couldn't count ACEs");
+        Log(LOG_LEVEL_VERBOSE, "Couldn't count ACEs");
         return -1;
     }
 
@@ -677,7 +675,7 @@ static int ACLEquals(acl_t first, acl_t second)
 
     if (more_aces != 1)         // first must contain at least one entry
     {
-        CfOut(cf_error, "acl_get_entry", "Unable to read ACE");
+        Log(LOG_LEVEL_ERR, "Unable to read ACE. (acl_get_entry: %s)", GetErrorStr());
         return -1;
     }
 
@@ -694,13 +692,13 @@ static int ACLEquals(acl_t first, acl_t second)
 
         if (acl_get_permset(ace_first, &perms_first) != 0)
         {
-            CfOut(cf_error, "acl_get_permset", "unable to read permissions");
+            Log(LOG_LEVEL_ERR, "Unable to read permissions. (acl_get_permset: %s)", GetErrorStr());
             return -1;
         }
 
         if (acl_get_permset(ace_second, &perms_second) != 0)
         {
-            CfOut(cf_error, "acl_get_permset", "unable to read permissions");
+            Log(LOG_LEVEL_ERR, "Unable to read permissions. (acl_get_permset: %s)", GetErrorStr());
             return -1;
         }
 
@@ -838,7 +836,7 @@ static int ParseEntityPosixLinux(char **str, acl_entry_t ace, int *is_mask)
 
             if (pwd == NULL)
             {
-                CfOut(cf_error, "getpwnnam", "Couldn't find user id for %s", ids);
+                Log(LOG_LEVEL_ERR, "Couldn't find user id for '%s'. (getpwnnam: %s)", ids, GetErrorStr());
                 free(ids);
                 return false;
             }
@@ -882,7 +880,7 @@ static int ParseEntityPosixLinux(char **str, acl_entry_t ace, int *is_mask)
 
             if (grp == NULL)
             {
-                CfOut(cf_error, "", "Error looking up group id for %s", ids);
+                Log(LOG_LEVEL_ERR, "Error looking up group id for %s", ids);
                 free(ids);
                 return false;
             }
@@ -904,20 +902,20 @@ static int ParseEntityPosixLinux(char **str, acl_entry_t ace, int *is_mask)
     }
     else
     {
-        CfOut(cf_error, "", "ace does not start with user:/group:/all:/mask:");
+        Log(LOG_LEVEL_ERR, "ace does not start with user:/group:/all:/mask:");
         return false;
     }
 
     if (acl_set_tag_type(ace, etype) != 0)
     {
-        CfOut(cf_error, "acl_set_tag_type", "Could not set ACE tag type.");
+        Log(LOG_LEVEL_ERR, "Could not set ACE tag type. (acl_set_tag_type: %s)", GetErrorStr());
         result = false;
     }
     else if (etype == ACL_USER || etype == ACL_GROUP)
     {
         if ((acl_set_qualifier(ace, &id)) != 0)
         {
-            CfOut(cf_error, "acl_set_qualifier", "Could not set ACE qualifier.");
+            Log(LOG_LEVEL_ERR, "Could not set ACE qualifier. (acl_set_qualifier: %s)", GetErrorStr());
             result = false;
         }
     }
@@ -931,7 +929,7 @@ static int ParseEntityPosixLinux(char **str, acl_entry_t ace, int *is_mask)
 }
 
 /*
-  Takes a Cfengine-syntax mode string and existing Posix
+  Takes a CFEngine-syntax mode string and existing Posix
   Linux-formatted permissions on the file system object as
   arguments. The mode-string will be applied on the permissions.
   Returns true on success, false otherwise.
@@ -950,7 +948,7 @@ static int ParseModePosixLinux(char *mode, acl_permset_t perms)
     {
         if (acl_clear_perms(perms) != 0)
         {
-            CfOut(cf_error, "acl_clear_perms", "Error clearing perms");
+            Log(LOG_LEVEL_ERR, "Error clearing perms. (acl_clear_perms: %s)", GetErrorStr());
             return false;
         }
         else
@@ -985,7 +983,7 @@ static int ParseModePosixLinux(char *mode, acl_permset_t perms)
 
             if (acl_clear_perms(perms) != 0)
             {
-                CfOut(cf_error, "acl_clear_perms", "Unable to clear ACL permissions");
+                Log(LOG_LEVEL_ERR, "Unable to clear ACL permissions. (acl_clear_perms: %s)", GetErrorStr());
                 return false;
             }
         }
@@ -1013,7 +1011,7 @@ static int ParseModePosixLinux(char *mode, acl_permset_t perms)
                 break;
 
             default:
-                CfOut(cf_error, "", "No linux support for generic permission flag '%c'", *mode);
+                Log(LOG_LEVEL_ERR, "No linux support for generic permission flag '%c'", *mode);
                 return false;
             }
 
@@ -1028,7 +1026,7 @@ static int ParseModePosixLinux(char *mode, acl_permset_t perms)
 
             if (retv != 0)
             {
-                CfOut(cf_error, "acl_[add|delete]_perms", "Could not change ACE permission.");
+                Log(LOG_LEVEL_ERR, "Could not change ACE permission. (acl_[add|delete]_perms: %s)", GetErrorStr());
                 return false;
             }
             mode++;
@@ -1057,7 +1055,7 @@ static int ParseModePosixLinux(char *mode, acl_permset_t perms)
                     break;
 
                 default:
-                    CfOut(cf_error, "", "!! No linux support for native permission flag '%c'", *mode);
+                    Log(LOG_LEVEL_ERR, "No linux support for native permission flag '%c'", *mode);
                     return false;
                 }
 
@@ -1072,7 +1070,7 @@ static int ParseModePosixLinux(char *mode, acl_permset_t perms)
 
                 if (retv != 0)
                 {
-                    CfOut(cf_error, "acl_[add|delete]_perm", "Could not change ACE permission.");
+                    Log(LOG_LEVEL_ERR, "Could not change ACE permission. (acl_[add|delete]_perm: %s)", GetErrorStr());
                     return false;
                 }
                 mode++;
@@ -1098,11 +1096,11 @@ static int ParseModePosixLinux(char *mode, acl_permset_t perms)
 
 #else /* HAVE_LIBACL */
 
-int CheckPosixLinuxACL(char *file_path, Acl acl, Attributes a, Promise *pp)
+int CheckPosixLinuxACL(EvalContext *ctx, ARG_UNUSED char *file_path, ARG_UNUSED Acl acl, Attributes a, Promise *pp)
 {
-    cfPS(cf_error, CF_FAIL, "", pp, a,
+    cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a,
          "!! Posix ACLs are not supported on this Linux system - install the Posix acl library");
-    PromiseRef(cf_error, pp);
+    PromiseRef(LOG_LEVEL_ERR, pp);
     return true;
 }
 

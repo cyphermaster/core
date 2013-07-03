@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,10 +17,9 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
 #include "generic_agent.h"
@@ -28,7 +27,7 @@
 #include "bootstrap.h"
 #include "sysinfo.h"
 #include "env_context.h"
-#include "constraints.h"
+#include "policy.h"
 #include "promises.h"
 #include "files_lib.h"
 #include "files_names.h"
@@ -41,52 +40,50 @@
 #include "syntax.h"
 #include "conversion.h"
 #include "expand.h"
-#include "transaction.h"
+#include "locks.h"
 #include "scope.h"
 #include "atexit.h"
 #include "unix.h"
-#include "cfstream.h"
 #include "client_code.h"
-#include "logging.h"
 #include "string_lib.h"
 #include "exec_tools.h"
 #include "list.h"
 #include "misc_lib.h"
 #include "fncall.h"
 #include "rlist.h"
+#include "syslog_client.h"
+#include "audit.h"
+#include "verify_classes.h"
+#include "verify_vars.h"
 
 #ifdef HAVE_NOVA
-#include "cf.nova.h"
-#include "nova_reporting.h"
-#else
-#include "reporting.h"
+# include "cf.nova.h"
 #endif
+
 
 static pthread_once_t pid_cleanup_once = PTHREAD_ONCE_INIT;
 
 static char PIDFILE[CF_BUFSIZE];
 
-static void VerifyPromises(Policy *policy, GenericAgentConfig *config, const ReportContext *report_context);
-static void CheckWorkingDirectories(const ReportContext *report_context);
-static Policy *Cf3ParseFile(const GenericAgentConfig *config, const char *filename);
-static Policy *Cf3ParseFiles(GenericAgentConfig *config, const ReportContext *report_context);
+static void VerifyPromises(EvalContext *ctx, Policy *policy, GenericAgentConfig *config);
+static void CheckWorkingDirectories(EvalContext *ctx);
+static Policy *Cf3ParseFile(const GenericAgentConfig *config, const char *input_path);
+static Policy *Cf3ParseFiles(EvalContext *ctx, GenericAgentConfig *config, const Rlist *inputs);
 static bool MissingInputFile(const char *input_file);
-static void CheckControlPromises(GenericAgentConfig *config, char *scope, char *agent, Seq *controllist);
-static void CheckVariablePromises(char *scope, Seq *var_promises);
-static void CheckCommonClassPromises(Seq *class_promises, const ReportContext *report_context);
-static void PrependAuditFile(char *file);
-static char *InputLocation(const char *filename, const char *input_file);
+static void CheckControlPromises(EvalContext *ctx, GenericAgentConfig *config, const Body *control_body);
+static void CheckVariablePromises(EvalContext *ctx, Seq *var_promises);
+static void CheckCommonClassPromises(EvalContext *ctx, Seq *class_promises);
 
 #if !defined(__MINGW32__)
 static void OpenLog(int facility);
 #endif
-static bool VerifyBundleSequence(const Policy *policy, const GenericAgentConfig *config);
+static bool VerifyBundleSequence(EvalContext *ctx, const Policy *policy, const GenericAgentConfig *config);
 
 /*****************************************************************************/
 
 static void SanitizeEnvironment()
 {
-    /* ps(1) and other utilities invoked by Cfengine may be affected */
+    /* ps(1) and other utilities invoked by CFEngine may be affected */
     unsetenv("COLUMNS");
 
     /* Make sure subprocesses output is not localized */
@@ -97,9 +94,7 @@ static void SanitizeEnvironment()
 
 /*****************************************************************************/
 
-#if !defined(HAVE_NOVA)
-
-void CheckLicenses(void)
+void CheckForPolicyHub(EvalContext *ctx)
 {
     struct stat sb;
     char name[CF_BUFSIZE];
@@ -109,133 +104,140 @@ void CheckLicenses(void)
 
     if (stat(name, &sb) != -1)
     {
-        HardClass("am_policy_hub");
-        CfOut(cf_verbose, "", " -> Additional class defined: am_policy_hub");
+        EvalContextHeapAddHard(ctx, "am_policy_hub");  // DEPRECATED: use policy_server instead
+        Log(LOG_LEVEL_VERBOSE, "Additional class defined: am_policy_hub");
+        EvalContextHeapAddHard(ctx, "policy_server");
+        Log(LOG_LEVEL_VERBOSE, "Additional class defined: policy_server");
     }
 }
 
-#endif
-
 /*****************************************************************************/
 
-void GenericAgentDiscoverContext(GenericAgentConfig *config, ReportContext *report_context)
+void GenericAgentDiscoverContext(EvalContext *ctx, GenericAgentConfig *config)
 {
-    char vbuff[CF_BUFSIZE];
-
 #ifdef HAVE_NOVA
-    CF_DEFAULT_DIGEST = cf_sha256;
+    CF_DEFAULT_DIGEST = HASH_METHOD_SHA256;
     CF_DEFAULT_DIGEST_LEN = CF_SHA256_LEN;
 #else
-    CF_DEFAULT_DIGEST = cf_md5;
+    CF_DEFAULT_DIGEST = HASH_METHOD_MD5;
     CF_DEFAULT_DIGEST_LEN = CF_MD5_LEN;
 #endif
 
-    InitializeGA(config, report_context);
+    InitializeGA(ctx, config);
 
-    SetReferenceTime(true);
+    SetReferenceTime(ctx, true);
     SetStartTime();
     SanitizeEnvironment();
 
     THIS_AGENT_TYPE = config->agent_type;
-    HardClass(CF_AGENTTYPES[THIS_AGENT_TYPE]);
+    EvalContextHeapAddHard(ctx, CF_AGENTTYPES[config->agent_type]);
 
-// need scope sys to set vars in expiry function
-    SetNewScope("sys");
+    GetNameInfo3(ctx, config->agent_type);
+    GetInterfacesInfo(ctx, config->agent_type);
 
-    if (EnterpriseExpiry())
+    Get3Environment(ctx, config->agent_type);
+    BuiltinClasses(ctx);
+    OSClasses(ctx);
+
+    EvalContextHeapPersistentLoadAll(ctx);
+    LoadSystemConstants(ctx);
+
+    if (config->agent_type == AGENT_TYPE_AGENT && config->agent_specific.agent.bootstrap_policy_server)
     {
-        CfOut(cf_error, "", "Cfengine - autonomous configuration engine. This enterprise license is invalid.\n");
-        exit(1);
-    }
+        if (!RemoveAllExistingPolicyInInputs(GetWorkDir()))
+        {
+            Log(LOG_LEVEL_ERR, "Error removing existing input files prior to bootstrap");
+            exit(EXIT_FAILURE);
+        }
 
-    if (AM_NOVA)
-    {
-        CfOut(cf_verbose, "", " -> This is CFE Nova\n");
-    }
+        if (!WriteBuiltinFailsafePolicy(GetWorkDir()))
+        {
+            Log(LOG_LEVEL_ERR, "Error writing builtin failsafe to inputs prior to bootstrap");
+            exit(EXIT_FAILURE);
+        }
 
-    if (report_context->report_writers[REPORT_OUTPUT_TYPE_KNOWLEDGE])
-    {
-        WriterWriteF(report_context->report_writers[REPORT_OUTPUT_TYPE_KNOWLEDGE], "bundle knowledge CFEngine_nomenclature\n{\n");
-        ShowTopicRepresentation(report_context);
-        WriterWriteF(report_context->report_writers[REPORT_OUTPUT_TYPE_KNOWLEDGE], "}\n\nbundle knowledge policy_analysis\n{\n");
-    }
+        bool am_policy_server = false;
+        {
+            const char *canonified_bootstrap_policy_server = CanonifyName(config->agent_specific.agent.bootstrap_policy_server);
+            am_policy_server = IsDefinedClass(ctx, canonified_bootstrap_policy_server, NULL);
+            {
+                char policy_server_ipv4_class[CF_BUFSIZE];
+                snprintf(policy_server_ipv4_class, CF_MAXVARSIZE, "ipv4_%s", canonified_bootstrap_policy_server);
+                am_policy_server |= IsDefinedClass(ctx, policy_server_ipv4_class, NULL);
+            }
 
-    NewScope("const");
-    NewScope("match");
-    NewScope("mon");
-    GetNameInfo3();
-    GetInterfacesInfo(config->agent_type);
+            if (am_policy_server)
+            {
+                Log(LOG_LEVEL_INFO, "Assuming role as policy server, with policy distribution point at %s/masterfiles", GetWorkDir());
+                EvalContextHeapAddHard(ctx, "am_policy_hub");
 
-    Get3Environment();
-    BuiltinClasses();
-    OSClasses();
+                if (!MasterfileExists(GetWorkDir()))
+                {
+                    Log(LOG_LEVEL_ERR, "In order to bootstrap as a policy server, the file '%s/masterfiles/promises.cf' must exist.", GetWorkDir());
+                    exit(EXIT_FAILURE);
+                }
+            }
+            else
+            {
+                Log(LOG_LEVEL_INFO, "Not assuming role as policy server");
+            }
 
-    LoadPersistentContext();
-    LoadSystemConstants();
+            WriteAmPolicyHubFile(CFWORKDIR, am_policy_server);
+        }
 
-    snprintf(vbuff, CF_BUFSIZE, "control_%s", CF_AGENTTYPES[THIS_AGENT_TYPE]);
-    SetNewScope(vbuff);
-    NewScope("this");
-    NewScope("match");
-
-    if (BOOTSTRAP)
-    {
-        CheckAutoBootstrap();
+        WritePolicyServerFile(GetWorkDir(), config->agent_specific.agent.bootstrap_policy_server);
+        SetPolicyServer(ctx, config->agent_specific.agent.bootstrap_policy_server);
+        Log(LOG_LEVEL_INFO, "Bootstrapping to '%s'", POLICY_SERVER);
     }
     else
     {
-        if (strlen(POLICY_SERVER) > 0)
+        char *existing_policy_server = ReadPolicyServerFile(GetWorkDir());
+        if (existing_policy_server)
         {
-            CfOut(cf_verbose, "", " -> Found a policy server (hub) on %s", POLICY_SERVER);
+            Log(LOG_LEVEL_VERBOSE, "This agent is bootstrapped to '%s'", existing_policy_server);
         }
         else
         {
-            CfOut(cf_verbose, "", " -> No policy server (hub) watch yet registered");
+            Log(LOG_LEVEL_VERBOSE, "This agent is not bootstrapped");
         }
+        SetPolicyServer(ctx, existing_policy_server);
     }
-
-    SetPolicyServer(POLICY_SERVER);
 }
 
-static bool IsPolicyPrecheckNeeded(GenericAgentConfig *config, bool force_validation)
+static bool IsPolicyPrecheckNeeded(EvalContext *ctx, GenericAgentConfig *config, bool force_validation)
 {
     bool check_policy = false;
 
-    if (SHOWREPORTS)
-    {
-        check_policy = true;
-        CfOut(cf_verbose, "", " -> Reports mode is enabled, force-validating policy");
-    }
     if (IsFileOutsideDefaultRepository(config->input_file))
     {
         check_policy = true;
-        CfOut(cf_verbose, "", " -> Input file is outside default repository, validating it");
+        Log(LOG_LEVEL_VERBOSE, "Input file is outside default repository, validating it");
     }
-    if (NewPromiseProposals(config->input_file, NULL))
+    if (NewPromiseProposals(ctx, config, NULL))
     {
         check_policy = true;
-        CfOut(cf_verbose, "", " -> Input file is changed since last validation, validating it");
+        Log(LOG_LEVEL_VERBOSE, "Input file is changed since last validation, validating it");
     }
     if (force_validation)
     {
         check_policy = true;
-        CfOut(cf_verbose, "", " -> always_validate is set, forcing policy validation");
+        Log(LOG_LEVEL_VERBOSE, "always_validate is set, forcing policy validation");
     }
 
     return check_policy;
 }
 
-bool GenericAgentCheckPolicy(GenericAgentConfig *config, const ReportContext *report_context, bool force_validation)
+bool GenericAgentCheckPolicy(EvalContext *ctx, GenericAgentConfig *config, bool force_validation)
 {
     if (!MissingInputFile(config->input_file))
     {
-        if (IsPolicyPrecheckNeeded(config, force_validation))
+        if (IsPolicyPrecheckNeeded(ctx, config, force_validation))
         {
-            bool policy_check_ok = CheckPromises(config->input_file, report_context);
+            bool policy_check_ok = CheckPromises(config);
 
-            if (BOOTSTRAP && !policy_check_ok)
+            if (config->agent_specific.agent.bootstrap_policy_server && !policy_check_ok)
             {
-                CfOut(cf_verbose, "", " -> Policy is not valid, but proceeding with bootstrap");
+                Log(LOG_LEVEL_VERBOSE, "Policy is not valid, but proceeding with bootstrap");
                 return true;
             }
 
@@ -243,7 +245,7 @@ bool GenericAgentCheckPolicy(GenericAgentConfig *config, const ReportContext *re
         }
         else
         {
-            CfOut(cf_verbose, "", " -> Policy is already validated");
+            Log(LOG_LEVEL_VERBOSE, "Policy is already validated");
             return true;
         }
     }
@@ -254,115 +256,300 @@ bool GenericAgentCheckPolicy(GenericAgentConfig *config, const ReportContext *re
 /* Level                                                                     */
 /*****************************************************************************/
 
-int CheckPromises(const char *input_file, const ReportContext *report_context)
+/**
+ * @brief Writes a file with a contained timestamp to mark a policy file as validated
+ * @return True if successful.
+ */
+static bool WritePolicyValidatedFile(const char *filename)
 {
-    char cmd[CF_BUFSIZE], cfpromises[CF_MAXVARSIZE];
-    char filename[CF_MAXVARSIZE];
-    struct stat sb;
-    int fd;
-    bool outsideRepo = false;
-
-    CfOut(cf_verbose, "", " -> Verifying the syntax of the inputs...\n");
-
-    snprintf(cfpromises, sizeof(cfpromises), "%s%cbin%ccf-promises%s", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR,
-             EXEC_SUFFIX);
-
-    if (cfstat(cfpromises, &sb) == -1)
+    if (!MakeParentDirectory(filename, true))
     {
-        CfOut(cf_error, "", "cf-promises%s needs to be installed in %s%cbin for pre-validation of full configuration",
-              EXEC_SUFFIX, CFWORKDIR, FILE_SEPARATOR);
+        Log(LOG_LEVEL_ERR, "While writing policy validated marker file '%s', could not create directory (MakeParentDirectory: %s)", filename, GetErrorStr());
         return false;
     }
 
-/* If we are cf-agent, check syntax before attempting to run */
-
-    snprintf(cmd, sizeof(cmd), "\"%s\" -cf \"", cfpromises);
-
-    outsideRepo = IsFileOutsideDefaultRepository(input_file);
-
-    if (outsideRepo)
+    int fd = creat(filename, 0600);
+    if (fd == -1)
     {
-        strlcat(cmd, input_file, CF_BUFSIZE);
+        Log(LOG_LEVEL_ERR, "While writing policy validated marker file '%s', could not create file (creat: %s)", filename, GetErrorStr());
+        return false;
     }
-    else
+
+    FILE *fp = fdopen(fd, "w");
+    time_t now = time(NULL);
+
+    char timebuf[26];
+
+    fprintf(fp, "%s", cf_strtimestamp_local(now, timebuf));
+    fclose(fp);
+
+    return true;
+}
+
+int CheckPromises(const GenericAgentConfig *config)
+{
+    char cmd[CF_BUFSIZE];
+
+    Log(LOG_LEVEL_VERBOSE, "Verifying the syntax of the inputs...");
     {
-        strlcat(cmd, CFWORKDIR, CF_BUFSIZE);
-        strlcat(cmd, FILE_SEPARATOR_STR "inputs" FILE_SEPARATOR_STR, CF_BUFSIZE);
-        strlcat(cmd, input_file, CF_BUFSIZE);
+        char cfpromises[CF_MAXVARSIZE];
+        snprintf(cfpromises, sizeof(cfpromises), "%s%cbin%ccf-promises%s", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR,
+                 EXEC_SUFFIX);
+
+        struct stat sb;
+        if (stat(cfpromises, &sb) == -1)
+        {
+            Log(LOG_LEVEL_ERR, "cf-promises%s needs to be installed in %s%cbin for pre-validation of full configuration",
+                  EXEC_SUFFIX, CFWORKDIR, FILE_SEPARATOR);
+            return false;
+        }
+
+        if (config->bundlesequence)
+        {
+            snprintf(cmd, sizeof(cmd), "\"%s\" \"", cfpromises);
+        }
+        else
+        {
+            snprintf(cmd, sizeof(cmd), "\"%s\" -c \"", cfpromises);
+        }
     }
+
+    strlcat(cmd, config->input_file, CF_BUFSIZE);
 
     strlcat(cmd, "\"", CF_BUFSIZE);
 
-    if (CBUNDLESEQUENCE_STR)
+    if (config->bundlesequence)
     {
         strlcat(cmd, " -b \"", CF_BUFSIZE);
-        strlcat(cmd, CBUNDLESEQUENCE_STR, CF_BUFSIZE);
+        for (const Rlist *rp = config->bundlesequence; rp; rp = rp->next)
+        {
+            const char *bundle_ref = rp->item;
+            strlcat(cmd, bundle_ref, CF_BUFSIZE);
+
+            if (rp->next)
+            {
+                strlcat(cmd, ",", CF_BUFSIZE);
+            }
+        }
         strlcat(cmd, "\"", CF_BUFSIZE);
     }
 
-    if (BOOTSTRAP)
+    if (config->agent_specific.agent.bootstrap_policy_server)
     {
         // avoids license complains from commercial cf-promises during bootstrap - see Nova_CheckLicensePromise
         strlcat(cmd, " -D bootstrap_mode", CF_BUFSIZE);
     }
 
-/* Check if reloading policy will succeed */
+    Log(LOG_LEVEL_VERBOSE, "Checking policy with command '%s'", cmd);
 
-    CfOut(cf_verbose, "", "Checking policy with command \"%s\"", cmd);
-
-    if (ShellCommandReturnsZero(cmd, true))
+    if (!ShellCommandReturnsZero(cmd, true))
     {
+        Log(LOG_LEVEL_ERR, "Policy failed validation with command '%s'", cmd);
+        return false;
+    }
 
-        if (!outsideRepo)
+    if (!IsFileOutsideDefaultRepository(config->original_input_file))
+    {
+        char validated_filename[CF_MAXVARSIZE];
+
+        if (MINUSF)
         {
-            if (MINUSF)
-            {
-                snprintf(filename, CF_MAXVARSIZE, "%s/state/validated_%s", CFWORKDIR, CanonifyName(input_file));
-                MapName(filename);
-            }
-            else
-            {
-                snprintf(filename, CF_MAXVARSIZE, "%s/masterfiles/cf_promises_validated", CFWORKDIR);
-                MapName(filename);
-            }
+            snprintf(validated_filename, CF_MAXVARSIZE, "%s/state/validated_%s", CFWORKDIR, CanonifyName(config->original_input_file));
+            MapName(validated_filename);
+        }
+        else
+        {
+            snprintf(validated_filename, CF_MAXVARSIZE, "%s/masterfiles/cf_promises_validated", CFWORKDIR);
+            MapName(validated_filename);
+        }
 
-            MakeParentDirectory(filename, true, report_context);
+        WritePolicyValidatedFile(validated_filename);
+    }
 
-            if ((fd = creat(filename, 0600)) != -1)
+    return true;
+}
+
+
+static void ShowContext(EvalContext *ctx)
+{
+    {
+        Writer *w = NULL;
+        if (LEGACY_OUTPUT)
+        {
+            w = FileWriter(stdout);
+            WriterWriteF(w, "%s>  -> Hard classes = {", VPREFIX);
+        }
+        else
+        {
+            w = StringWriter();
+            WriterWrite(w, "Discovered hard classes:");
+        }
+
+        Seq *hard_contexts = SeqNew(1000, NULL);
+        SetIterator it = EvalContextHeapIteratorHard(ctx);
+        char *context = NULL;
+        while ((context = SetIteratorNext(&it)))
+        {
+            if (!EvalContextHeapContainsNegated(ctx, context))
             {
-                FILE *fp = fdopen(fd, "w");
-                time_t now = time(NULL);
-
-                char timebuf[26];
-
-                fprintf(fp, "%s", cf_strtimestamp_local(now, timebuf));
-                fclose(fp);
-                CfOut(cf_verbose, "", " -> Caching the state of validation\n");
-            }
-            else
-            {
-                CfOut(cf_verbose, "creat", " -> Failed to cache the state of validation\n");
+                SeqAppend(hard_contexts, context);
             }
         }
 
-        return true;
+        SeqSort(hard_contexts, (SeqItemComparator)strcmp, NULL);
+
+        for (size_t i = 0; i < SeqLength(hard_contexts); i++)
+        {
+            const char *context = SeqAt(hard_contexts, i);
+
+            WriterWriteF(w, " %s", context);
+        }
+
+        if (LEGACY_OUTPUT)
+        {
+            WriterWrite(w, "}\n");
+            FileWriterDetach(w);
+        }
+        else
+        {
+            Log(LOG_LEVEL_VERBOSE, "%s", StringWriterData(w));
+            WriterClose(w);
+        }
+
+
+        SeqDestroy(hard_contexts);
     }
-    else
+
     {
-        return false;
+        Writer *w = NULL;
+        if (LEGACY_OUTPUT)
+        {
+            w = FileWriter(stdout);
+            WriterWriteF(w, "%s>  -> Additional classes = {", VPREFIX);
+        }
+        else
+        {
+            w = StringWriter();
+            WriterWrite(w, "Additional classes:");
+        }
+
+        Seq *soft_contexts = SeqNew(1000, NULL);
+        SetIterator it = EvalContextHeapIteratorSoft(ctx);
+        char *context = NULL;
+        while ((context = SetIteratorNext(&it)))
+        {
+            if (!EvalContextHeapContainsNegated(ctx, context))
+            {
+                SeqAppend(soft_contexts, context);
+            }
+        }
+
+        SeqSort(soft_contexts, (SeqItemComparator)strcmp, NULL);
+
+        for (size_t i = 0; i < SeqLength(soft_contexts); i++)
+        {
+            const char *context = SeqAt(soft_contexts, i);
+            WriterWriteF(w, " %s", context);
+        }
+
+        if (LEGACY_OUTPUT)
+        {
+            WriterWrite(w, "}\n");
+            FileWriterDetach(w);
+        }
+        else
+        {
+            if (SeqLength(soft_contexts) > 0)
+            {
+                Log(LOG_LEVEL_VERBOSE, "%s", StringWriterData(w));
+            }
+            WriterClose(w);
+        }
+        SeqDestroy(soft_contexts);
+    }
+
+    {
+        bool have_negated_classes = false;
+        Writer *w = NULL;
+        if (LEGACY_OUTPUT)
+        {
+            w = FileWriter(stdout);
+            WriterWriteF(w, "%s>  -> Negated classes = {", VPREFIX);
+        }
+        else
+        {
+            w = StringWriter();
+            WriterWrite(w, "Negated classes:");
+        }
+
+        StringSetIterator it = EvalContextHeapIteratorNegated(ctx);
+        const char *context = NULL;
+        while ((context = StringSetIteratorNext(&it)))
+        {
+            WriterWriteF(w, " %s", context);
+            have_negated_classes = true;
+        }
+
+        if (LEGACY_OUTPUT)
+        {
+            WriterWrite(w, "}\n");
+            FileWriterDetach(w);
+        }
+        else
+        {
+            if (have_negated_classes)
+            {
+                Log(LOG_LEVEL_VERBOSE, "%s", StringWriterData(w));
+            }
+            WriterClose(w);
+        }
     }
 }
 
-/*****************************************************************************/
-
-Policy *GenericAgentLoadPolicy(AgentType agent_type, GenericAgentConfig *config, const ReportContext *report_context)
+Policy *GenericAgentLoadPolicy(EvalContext *ctx, GenericAgentConfig *config)
 {
-    DeleteAllPromiseIds();      // in case we are re-reading, delete old handles
+    PROMISETIME = time(NULL);
 
-    Policy *policy = Cf3ParseFiles(config, report_context);
+    Policy *main_policy = Cf3ParseFile(config, config->input_file);
+
+    if (main_policy)
+    {
+        PolicyHashVariables(ctx, main_policy);
+        HashControls(ctx, main_policy, config);
+
+        if (PolicyIsRunnable(main_policy))
+        {
+            Policy *aux_policy = Cf3ParseFiles(ctx, config, InputFiles(ctx, main_policy));
+            if (aux_policy)
+            {
+                main_policy = PolicyMerge(main_policy, aux_policy);
+            }
+            else
+            {
+                Log(LOG_LEVEL_ERR, "Syntax errors were found in policy files included from the main policy");
+                exit(EXIT_FAILURE); // TODO: do not exit
+            }
+        }
+    }
+    else
+    {
+        Log(LOG_LEVEL_ERR, "Syntax errors were found in the main policy file");
+        exit(EXIT_FAILURE); // TODO: do not exit
+    }
+
     {
         Seq *errors = SeqNew(100, PolicyErrorDestroy);
-        if (!PolicyCheckPartial(policy, errors))
+
+        if (PolicyCheckPartial(main_policy, errors))
+        {
+            if (!config->bundlesequence && (PolicyIsRunnable(main_policy) || config->check_runnable))
+            {
+                Log(LOG_LEVEL_VERBOSE, "Running full policy integrity checks");
+                PolicyCheckRunnable(ctx, main_policy, errors, config->ignore_missing_bundles);
+            }
+        }
+
+        if (SeqLength(errors) > 0)
         {
             Writer *writer = FileWriter(stderr);
             for (size_t i = 0; i < errors->length; i++)
@@ -370,63 +557,23 @@ Policy *GenericAgentLoadPolicy(AgentType agent_type, GenericAgentConfig *config,
                 PolicyErrorWrite(writer, errors->data[i]);
             }
             WriterClose(writer);
+            exit(EXIT_FAILURE); // TODO: do not exit
         }
 
         SeqDestroy(errors);
     }
 
-/* Now import some web variables that are set in cf-know/control for the report options */
-
+    if (LogGetGlobalLevel() >= LOG_LEVEL_VERBOSE)
     {
-        Rval rval = { 0 };
-
-        switch (GetVariable("control_common", "cfinputs_version", &rval))
-        {
-        case DATA_TYPE_STRING:
-            AUDITPTR->version = xstrdup((char *) rval.item);
-            break;
-
-        default:
-            AUDITPTR->version = xstrdup("no specified version");
-            break;
-        }
+        ShowContext(ctx);
     }
 
-    WriterWriteF(report_context->report_writers[REPORT_OUTPUT_TYPE_TEXT], "Expanded promise list for %s component\n\n",
-                 AgentTypeToString(agent_type));
-
-    ShowContext(report_context);
-
-    if (config->check_runnable || PolicyIsRunnable(policy))
+    if (main_policy)
     {
-        CfOut(cf_inform, "", "Running full policy integrity checks");
-
-        Seq *errors = SeqNew(100, PolicyErrorDestroy);
-        if (!PolicyCheckRunnable(policy, errors, config->ignore_missing_bundles))
-        {
-            Writer *writer = FileWriter(stderr);
-            for (size_t i = 0; i < errors->length; i++)
-            {
-                PolicyErrorWrite(writer, errors->data[i]);
-            }
-            WriterClose(writer);
-
-            // TODO: exiting here because it does not make sense to continue.
-            // however, this condition should be bubbled up somehow, rather than exiting.
-            // need to restructure a bit first, separating reading from checking.
-            exit(EXIT_FAILURE);
-        }
-        SeqDestroy(errors);
+        VerifyPromises(ctx, main_policy, config);
     }
 
-    VerifyPromises(policy, config, report_context);
-
-    if (agent_type != AGENT_TYPE_COMMON)
-    {
-        ShowScopedVariables(report_context, REPORT_OUTPUT_TYPE_TEXT);
-    }
-
-    return policy;
+    return main_policy;
 }
 
 /*****************************************************************************/
@@ -451,7 +598,7 @@ void CloseLog(void)
 /* Level 1                                                         */
 /*******************************************************************/
 
-void InitializeGA(GenericAgentConfig *config, const ReportContext *report_context)
+void InitializeGA(EvalContext *ctx, GenericAgentConfig *config)
 {
     int force = false;
     struct stat statbuf, sb;
@@ -461,41 +608,29 @@ void InitializeGA(GenericAgentConfig *config, const ReportContext *report_contex
     SHORT_CFENGINEPORT = htons((unsigned short) 5308);
     snprintf(STR_CFENGINEPORT, 15, "5308");
 
-    HardClass("any");
+    EvalContextHeapAddHard(ctx, "any");
 
 #if defined HAVE_NOVA
-    HardClass("nova_edition");
-    HardClass("enterprise_edition");
+    EvalContextHeapAddHard(ctx, "nova_edition");
+    EvalContextHeapAddHard(ctx, "enterprise_edition");
 #else
-    HardClass("community_edition");
+    EvalContextHeapAddHard(ctx, "community_edition");
 #endif
 
     strcpy(VPREFIX, GetConsolePrefix());
 
-    if (VERBOSE)
-    {
-        HardClass("verbose_mode");
-    }
-
-    if (INFORM)
-    {
-        HardClass("inform_mode");
-    }
-
-    if (DEBUG)
-    {
-        HardClass("debug_mode");
-    }
-
-    CfOut(cf_verbose, "", "CFEngine - autonomous configuration engine - commence self-diagnostic prelude\n");
-    CfOut(cf_verbose, "", "------------------------------------------------------------------------\n");
-
 /* Define trusted directories */
 
-    strcpy(CFWORKDIR, GetWorkDir());
-    MapName(CFWORKDIR);
+    {
+        const char *workdir = GetWorkDir();
+        if (!workdir)
+        {
+            FatalError(ctx, "Error determining working directory");
+        }
 
-    CfDebug("Setting CFWORKDIR=%s\n", CFWORKDIR);
+        strcpy(CFWORKDIR, workdir);
+        MapName(CFWORKDIR);
+    }
 
 /* On windows, use 'binary mode' as default for files */
 
@@ -508,59 +643,59 @@ void InitializeGA(GenericAgentConfig *config, const ReportContext *report_contex
 
     if (!LOOKUP)                /* cf-know should not do this in lookup mode */
     {
-        CfOut(cf_verbose, "", "Work directory is %s\n", CFWORKDIR);
+        Log(LOG_LEVEL_VERBOSE, "Work directory is %s", CFWORKDIR);
 
         snprintf(vbuff, CF_BUFSIZE, "%s%cinputs%cupdate.conf", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        MakeParentDirectory(vbuff, force, report_context);
+        MakeParentDirectory(vbuff, force);
         snprintf(vbuff, CF_BUFSIZE, "%s%cbin%ccf-agent -D from_cfexecd", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        MakeParentDirectory(vbuff, force, report_context);
+        MakeParentDirectory(vbuff, force);
         snprintf(vbuff, CF_BUFSIZE, "%s%coutputs%cspooled_reports", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        MakeParentDirectory(vbuff, force, report_context);
+        MakeParentDirectory(vbuff, force);
         snprintf(vbuff, CF_BUFSIZE, "%s%clastseen%cintermittencies", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        MakeParentDirectory(vbuff, force, report_context);
+        MakeParentDirectory(vbuff, force);
         snprintf(vbuff, CF_BUFSIZE, "%s%creports%cvarious", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        MakeParentDirectory(vbuff, force, report_context);
+        MakeParentDirectory(vbuff, force);
 
         snprintf(vbuff, CF_BUFSIZE, "%s%cinputs", CFWORKDIR, FILE_SEPARATOR);
 
-        if (cfstat(vbuff, &sb) == -1)
+        if (stat(vbuff, &sb) == -1)
         {
-            FatalError(" !!! No access to WORKSPACE/inputs dir");
+            FatalError(ctx, " No access to WORKSPACE/inputs dir");
         }
         else
         {
-            cf_chmod(vbuff, sb.st_mode | 0700);
+            chmod(vbuff, sb.st_mode | 0700);
         }
 
         snprintf(vbuff, CF_BUFSIZE, "%s%coutputs", CFWORKDIR, FILE_SEPARATOR);
 
-        if (cfstat(vbuff, &sb) == -1)
+        if (stat(vbuff, &sb) == -1)
         {
-            FatalError(" !!! No access to WORKSPACE/outputs dir");
+            FatalError(ctx, " No access to WORKSPACE/outputs dir");
         }
         else
         {
-            cf_chmod(vbuff, sb.st_mode | 0700);
+            chmod(vbuff, sb.st_mode | 0700);
         }
 
         sprintf(ebuff, "%s%cstate%ccf_procs", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        MakeParentDirectory(ebuff, force, report_context);
+        MakeParentDirectory(ebuff, force);
 
-        if (cfstat(ebuff, &statbuf) == -1)
+        if (stat(ebuff, &statbuf) == -1)
         {
             CreateEmptyFile(ebuff);
         }
 
         sprintf(ebuff, "%s%cstate%ccf_rootprocs", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
 
-        if (cfstat(ebuff, &statbuf) == -1)
+        if (stat(ebuff, &statbuf) == -1)
         {
             CreateEmptyFile(ebuff);
         }
 
         sprintf(ebuff, "%s%cstate%ccf_otherprocs", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
 
-        if (cfstat(ebuff, &statbuf) == -1)
+        if (stat(ebuff, &statbuf) == -1)
         {
             CreateEmptyFile(ebuff);
         }
@@ -572,14 +707,18 @@ void InitializeGA(GenericAgentConfig *config, const ReportContext *report_contex
 
     if (!LOOKUP)
     {
-        CheckWorkingDirectories(report_context);
+        CheckWorkingDirectories(ctx);
     }
 
-    LoadSecretKeys();
+    const char *bootstrapped_policy_server = ReadPolicyServerFile(CFWORKDIR);
+    if (!LoadSecretKeys(bootstrapped_policy_server))
+    {
+        FatalError(ctx, "Could not load secret keys");
+    }
 
     if (!MINUSF)
     {
-        GenericAgentConfigSetInputFile(config, "promises.cf");
+        GenericAgentConfigSetInputFile(config, GetWorkDir(), "promises.cf");
     }
 
     DetermineCfenginePort();
@@ -589,89 +728,92 @@ void InitializeGA(GenericAgentConfig *config, const ReportContext *report_contex
 
     setlinebuf(stdout);
 
-    if (BOOTSTRAP)
+    if (config->agent_specific.agent.bootstrap_policy_server)
     {
         snprintf(vbuff, CF_BUFSIZE, "%s%cinputs%cfailsafe.cf", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
 
-        if (!IsEnterprise() && cfstat(vbuff, &statbuf) == -1)
+#ifndef HAVE_NOVA
+        if (stat(vbuff, &statbuf) == -1)
         {
-            GenericAgentConfigSetInputFile(config, "failsafe.cf");
+            GenericAgentConfigSetInputFile(config, GetWorkDir(), "failsafe.cf");
         }
         else
+#endif
         {
-            GenericAgentConfigSetInputFile(config, vbuff);
+            GenericAgentConfigSetInputFile(config, GetWorkDir(), vbuff);
         }
     }
 }
 
 /*******************************************************************/
 
-static Policy *Cf3ParseFiles(GenericAgentConfig *config, const ReportContext *report_context)
+static Policy *Cf3ParseFiles(EvalContext *ctx, GenericAgentConfig *config, const Rlist *inputs)
 {
-    // TODO: remove PARSING
-    PARSING = true;
+    Policy *policy = PolicyNew();
+    bool contains_parse_errors = false;
 
-    PROMISETIME = time(NULL);
-
-    Policy *main_policy = Cf3ParseFile(config, config->input_file);
-
-    HashVariables(main_policy, NULL, report_context);
-    HashControls(main_policy, config);
-
-    if (PolicyIsRunnable(main_policy))
+    for (const Rlist *rp = inputs; rp; rp = rp->next)
     {
-        for (const Rlist *rp = InputFiles(main_policy); rp; rp = rp->next)
+        // TODO: ad-hoc validation, necessary?
+        if (rp->type != RVAL_TYPE_SCALAR)
         {
-            // TODO: ad-hoc validation, necessary?
-            if (rp->type != RVAL_TYPE_SCALAR)
+            Log(LOG_LEVEL_ERR, "Non-file object in inputs list");
+            continue;
+        }
+        else
+        {
+            Rval returnval;
+
+            if (strcmp(rp->item, CF_NULL_VALUE) == 0)
             {
-                CfOut(cf_error, "", "Non-file object in inputs list\n");
+                continue;
+            }
+
+            returnval = EvaluateFinalRval(ctx, "sys", (Rval) {rp->item, rp->type}, true, NULL);
+
+            Policy *aux_policy = NULL;
+            switch (returnval.type)
+            {
+            case RVAL_TYPE_SCALAR:
+                aux_policy = Cf3ParseFile(config, GenericAgentResolveInputPath(config, returnval.item));
+                break;
+
+            case RVAL_TYPE_LIST:
+                aux_policy = Cf3ParseFiles(ctx, config, returnval.item);
+                break;
+
+            default:
+                ProgrammingError("Unknown type in input list for parsing: %d", returnval.type);
+                break;
+            }
+
+            if (aux_policy)
+            {
+                policy = PolicyMerge(policy, aux_policy);
             }
             else
             {
-                Rval returnval;
-
-                if (strcmp(rp->item, CF_NULL_VALUE) == 0)
-                {
-                    continue;
-                }
-
-                returnval = EvaluateFinalRval("sys", (Rval) {rp->item, rp->type}, true, NULL);
-
-                switch (returnval.type)
-                {
-                    case RVAL_TYPE_SCALAR:
-                    {
-                        Policy *policy = Cf3ParseFile(config, returnval.item);
-                        main_policy = PolicyMerge(main_policy, policy);
-                    }
-                    break;
-
-                    case RVAL_TYPE_LIST:
-                    for (const Rlist *sl = returnval.item; sl != NULL; sl = sl->next)
-                    {
-                        Policy *policy = Cf3ParseFile(config, sl->item);
-                        main_policy = PolicyMerge(main_policy, policy);
-                    }
-                    break;
-
-                    default:
-                    break;
-                }
-
-                RvalDestroy(returnval);
+                contains_parse_errors = true;
             }
 
-            HashVariables(main_policy, NULL, report_context);
-            HashControls(main_policy, config);
+            RvalDestroy(returnval);
         }
+
+        PolicyHashVariables(ctx, policy);
+        HashControls(ctx, policy, config);
     }
 
-    HashVariables(main_policy, NULL, report_context);
+    PolicyHashVariables(ctx, policy);
 
-    PARSING = false;
-
-    return main_policy;
+    if (contains_parse_errors)
+    {
+        PolicyDestroy(policy);
+        return NULL;
+    }
+    else
+    {
+        return policy;
+    }
 }
 
 /*******************************************************************/
@@ -679,13 +821,10 @@ static Policy *Cf3ParseFiles(GenericAgentConfig *config, const ReportContext *re
 static bool MissingInputFile(const char *input_file)
 {
     struct stat sb;
-    char wfilename[CF_BUFSIZE];
 
-    strncpy(wfilename, InputLocation(input_file, input_file), CF_BUFSIZE);
-
-    if (cfstat(wfilename, &sb) == -1)
+    if (stat(input_file, &sb) == -1)
     {
-        CfOut(cf_error, "stat", "There is no readable input file at %s", wfilename);
+        Log(LOG_LEVEL_ERR, "There is no readable input file at '%s'. (stat: %s)", input_file, GetErrorStr());
         return true;
     }
 
@@ -694,18 +833,17 @@ static bool MissingInputFile(const char *input_file)
 
 /*******************************************************************/
 
-int NewPromiseProposals(const char *input_file, const Rlist *input_files)
+int NewPromiseProposals(EvalContext *ctx, const GenericAgentConfig *config, const Rlist *input_files)
 {
     Rlist *sl;
     struct stat sb;
     int result = false;
     char filename[CF_MAXVARSIZE];
-    char wfilename[CF_BUFSIZE];
     time_t validated_at;
 
     if (MINUSF)
     {
-        snprintf(filename, CF_MAXVARSIZE, "%s/state/validated_%s", CFWORKDIR, CanonifyName(input_file));
+        snprintf(filename, CF_MAXVARSIZE, "%s/state/validated_%s", CFWORKDIR, CanonifyName(config->original_input_file));
         MapName(filename);
     }
     else
@@ -727,30 +865,28 @@ int NewPromiseProposals(const char *input_file, const Rlist *input_files)
 
     if (validated_at > time(NULL))
     {
-        CfOut(cf_inform, "",
+        Log(LOG_LEVEL_INFO,
               "!! Clock seems to have jumped back in time - mtime of %s is newer than current time - touching it",
               filename);
 
         if (utime(filename, NULL) == -1)
         {
-            CfOut(cf_error, "utime", "!! Could not touch %s", filename);
+            Log(LOG_LEVEL_ERR, "Could not touch '%s'. (utime: %s)", filename, GetErrorStr());
         }
 
         validated_at = 0;
         return true;
     }
 
-    strncpy(wfilename, InputLocation(input_file, input_file), CF_BUFSIZE);
-
-    if (cfstat(wfilename, &sb) == -1)
+    if (stat(config->input_file, &sb) == -1)
     {
-        CfOut(cf_verbose, "stat", "There is no readable input file at %s", input_file);
+        Log(LOG_LEVEL_VERBOSE, "There is no readable input file at '%s'. (stat: %s)", config->input_file, GetErrorStr());
         return true;
     }
 
     if (sb.st_mtime > validated_at || sb.st_mtime > PROMISETIME)
     {
-        CfOut(cf_verbose, "", " -> Promises seem to change");
+        Log(LOG_LEVEL_VERBOSE, "Promises seem to change");
         return true;
     }
 
@@ -761,7 +897,7 @@ int NewPromiseProposals(const char *input_file, const Rlist *input_files)
 
     if (IsNewerFileTree(filename, PROMISETIME))
     {
-        CfOut(cf_verbose, "", " -> Quick search detected file changes");
+        Log(LOG_LEVEL_VERBOSE, "Quick search detected file changes");
         return true;
     }
 
@@ -771,19 +907,19 @@ int NewPromiseProposals(const char *input_file, const Rlist *input_files)
     {
         if (rp->type != RVAL_TYPE_SCALAR)
         {
-            CfOut(cf_error, "", "Non file object %s in list\n", (char *) rp->item);
+            Log(LOG_LEVEL_ERR, "Non file object %s in list", (char *) rp->item);
         }
         else
         {
-            Rval returnval = EvaluateFinalRval("sys", (Rval) { rp->item, rp->type }, true, NULL);
+            Rval returnval = EvaluateFinalRval(ctx, "sys", (Rval) { rp->item, rp->type }, true, NULL);
 
             switch (returnval.type)
             {
             case RVAL_TYPE_SCALAR:
 
-                if (cfstat(InputLocation((char *) returnval.item, input_file), &sb) == -1)
+                if (stat(GenericAgentResolveInputPath(config, (char *) returnval.item), &sb) == -1)
                 {
-                    CfOut(cf_error, "stat", "Unreadable promise proposals at %s", (char *) returnval.item);
+                    Log(LOG_LEVEL_ERR, "Unreadable promise proposals at '%s'. (stat: %s)", (char *) returnval.item, GetErrorStr());
                     result = true;
                     break;
                 }
@@ -798,9 +934,14 @@ int NewPromiseProposals(const char *input_file, const Rlist *input_files)
 
                 for (sl = (Rlist *) returnval.item; sl != NULL; sl = sl->next)
                 {
-                    if (cfstat(InputLocation((char *) sl->item, input_file), &sb) == -1)
+                    if (strcmp((char *) sl->item, CF_NULL_VALUE) == 0)
                     {
-                        CfOut(cf_error, "stat", "Unreadable promise proposals at %s", (char *) sl->item);
+                        continue;
+                    }
+
+                    if (stat(GenericAgentResolveInputPath(config, (char *) sl->item), &sb) == -1)
+                    {
+                        Log(LOG_LEVEL_ERR, "Unreadable promise proposals at '%s'. (stat: %s)", (char *) sl->item, GetErrorStr());
                         result = true;
                         break;
                     }
@@ -830,7 +971,7 @@ int NewPromiseProposals(const char *input_file, const Rlist *input_files)
     snprintf(filename, CF_MAXVARSIZE, "%s/policy_server.dat", CFWORKDIR);
     MapName(filename);
 
-    if ((cfstat(filename, &sb) != -1) && (sb.st_mtime > PROMISETIME))
+    if ((stat(filename, &sb) != -1) && (sb.st_mtime > PROMISETIME))
     {
         result = true;
     }
@@ -838,134 +979,77 @@ int NewPromiseProposals(const char *input_file, const Rlist *input_files)
     return result;
 }
 
-/*******************************************************************/
-
-ReportContext *OpenReports(AgentType agent_type)
-{
-    const char *workdir = GetWorkDir();
-    char name[CF_BUFSIZE];
-
-    FILE *freport_text = NULL;
-    FILE *freport_knowledge = NULL;
-
-    if (SHOWREPORTS)
-    {
-        snprintf(name, CF_BUFSIZE, "%s%creports%cpromise_output_%s.txt", workdir, FILE_SEPARATOR, FILE_SEPARATOR,
-                 AgentTypeToString(agent_type));
-
-        if ((freport_text = fopen(name, "w")) == NULL)
-        {
-            CfOut(cf_error, "fopen", "Cannot open output file %s", name);
-            freport_text = fopen(NULLFILE, "w");
-        }
-
-        snprintf(name, CF_BUFSIZE, "%s%cpromise_knowledge.cf", workdir, FILE_SEPARATOR);
-
-        if ((freport_knowledge = fopen(name, "w")) == NULL)
-        {
-            CfOut(cf_error, "fopen", "Cannot open output file %s", name);
-        }
-
-        CfOut(cf_inform, "", " -> Writing knowledge output to %s", workdir);
-    }
-    else
-    {
-        snprintf(name, CF_BUFSIZE, NULLFILE);
-        if ((freport_text = fopen(name, "w")) == NULL)
-        {
-            FatalError("Cannot open output file %s", name);
-        }
-    }
-
-    if (!freport_text)
-    {
-        FatalError("Unable to continue as the null-file is unwritable");
-    }
-
-
-    ReportContext *context = ReportContextNew();
-    ReportContextAddWriter(context, REPORT_OUTPUT_TYPE_TEXT, FileWriter(freport_text));
-
-    if (freport_knowledge)
-    {
-        ReportContextAddWriter(context, REPORT_OUTPUT_TYPE_KNOWLEDGE, FileWriter(freport_knowledge));
-    }
-
-    return context;
-}
-
-/*******************************************************************/
-
-void CloseReports(const char *agents, ReportContext *report_context)
-{
-    char name[CF_BUFSIZE];
-
-#ifndef HAVE_NOVA
-    if (SHOWREPORTS)
-    {
-        CfOut(cf_verbose, "", "Wrote compilation report %s%creports%cpromise_output_%s.txt", CFWORKDIR, FILE_SEPARATOR,
-              FILE_SEPARATOR, agents);
-        CfOut(cf_verbose, "", "Wrote compilation report %s%creports%cpromise_output_%s.html", CFWORKDIR, FILE_SEPARATOR,
-              FILE_SEPARATOR, agents);
-        CfOut(cf_verbose, "", "Wrote knowledge map %s%cpromise_knowledge.cf", CFWORKDIR, FILE_SEPARATOR);
-    }
-#endif
-    
-    ReportContextDestroy(report_context);
-
-// Make the knowledge readable in situ
-
-    snprintf(name, CF_BUFSIZE, "%s%cpromise_knowledge.cf", CFWORKDIR, FILE_SEPARATOR);
-    chmod(name, 0644);
-}
-
-/*******************************************************************/
-/* Level                                                           */
-/*******************************************************************/
-
 /*
  * The difference between filename and input_input file is that the latter is the file specified by -f or
  * equivalently the file containing body common control. This will hopefully be squashed in later refactoring.
  */
-static Policy *Cf3ParseFile(const GenericAgentConfig *config, const char *filename)
+static Policy *Cf3ParseFile(const GenericAgentConfig *config, const char *input_path)
 {
     struct stat statbuf;
-    char wfilename[CF_BUFSIZE];
 
-    strncpy(wfilename, InputLocation(filename, config->input_file), CF_BUFSIZE);
-
-    if (cfstat(wfilename, &statbuf) == -1)
+    if (stat(input_path, &statbuf) == -1)
     {
         if (config->ignore_missing_inputs)
         {
             return PolicyNew();
         }
 
-        CfOut(cf_error, "stat", "Can't stat file \"%s\" for parsing\n", wfilename);
+        Log(LOG_LEVEL_ERR, "Can't stat file '%s' for parsing. (stat: %s)", input_path, GetErrorStr());
         exit(1);
     }
 
 #ifndef _WIN32
     if (config->check_not_writable_by_others && (statbuf.st_mode & (S_IWGRP | S_IWOTH)))
     {
-        CfOut(cf_error, "", "File %s (owner %ju) is writable by others (security exception)", wfilename, (uintmax_t)statbuf.st_uid);
+        Log(LOG_LEVEL_ERR, "File %s (owner %ju) is writable by others (security exception)", input_path, (uintmax_t)statbuf.st_uid);
         exit(1);
     }
 #endif
 
-    CfDebug("+++++++++++++++++++++++++++++++++++++++++++++++\n");
-    CfOut(cf_verbose, "", "  > Parsing file %s\n", wfilename);
-    CfDebug("+++++++++++++++++++++++++++++++++++++++++++++++\n");
+    Log(LOG_LEVEL_VERBOSE, "Parsing file '%s'", input_path);
 
-    PrependAuditFile(wfilename);
-
-    if (!FileCanOpen(wfilename, "r"))
+    if (!FileCanOpen(input_path, "r"))
     {
-        printf("Can't open file %s for parsing\n", wfilename);
+        Log(LOG_LEVEL_ERR, "Can't open file '%s' for parsing", input_path);
         exit(1);
     }
 
-    return ParserParseFile(wfilename);
+    Policy *policy = NULL;
+    if (StringEndsWith(input_path, ".json"))
+    {
+        char *contents = NULL;
+        if (FileReadMax(&contents, input_path, SIZE_MAX) == -1)
+        {
+            Log(LOG_LEVEL_ERR, "Error reading JSON input file '%s'", input_path);
+            return NULL;
+        }
+        JsonElement *json_policy = NULL;
+        const char *data = contents; // TODO: need to fix JSON parser signature, just silly
+        if (JsonParse(&data, &json_policy) != JSON_PARSE_OK)
+        {
+            Log(LOG_LEVEL_ERR, "Error parsing JSON input file '%s'", input_path);
+            free(contents);
+            return NULL;
+        }
+
+        policy = PolicyFromJson(json_policy);
+
+        JsonElementDestroy(json_policy);
+        free(contents);
+    }
+    else
+    {
+        if (config->agent_type == AGENT_TYPE_COMMON)
+        {
+            policy = ParserParseFile(input_path, config->agent_specific.common.parser_warnings, config->agent_specific.common.parser_warnings_error);
+        }
+        else
+        {
+            policy = ParserParseFile(input_path, 0, 0);
+        }
+    }
+
+    return policy;
 }
 
 /*******************************************************************/
@@ -980,7 +1064,6 @@ Seq *ControlBodyConstraints(const Policy *policy, AgentType agent)
         {
             if (strcmp(body->name, "control") == 0)
             {
-                CfDebug("%s body for type %s\n", body->name, body->type);
                 return body->conlist;
             }
         }
@@ -989,7 +1072,7 @@ Seq *ControlBodyConstraints(const Policy *policy, AgentType agent)
     return NULL;
 }
 
-const Rlist *InputFiles(Policy *policy)
+const Rlist *InputFiles(EvalContext *ctx, Policy *policy)
 {
     Body *body_common_control = PolicyGetBody(policy, NULL, "common", "control");
     if (!body_common_control)
@@ -998,8 +1081,8 @@ const Rlist *InputFiles(Policy *policy)
         return NULL;
     }
 
-    Seq *potential_inputs = ConstraintGetFromBody(body_common_control, "inputs");
-    Constraint *cp = EffectiveConstraint(potential_inputs);
+    Seq *potential_inputs = BodyGetConstraint(body_common_control, "inputs");
+    Constraint *cp = EffectiveConstraint(ctx, potential_inputs);
     SeqDestroy(potential_inputs);
 
     return cp ? cp->rval.item : NULL;
@@ -1054,226 +1137,144 @@ static int ParseFacility(const char *name)
 
 void SetFacility(const char *retval)
 {
-    CfOut(cf_verbose, "", "SET Syslog FACILITY = %s\n", retval);
+    Log(LOG_LEVEL_VERBOSE, "SET Syslog FACILITY = %s", retval);
 
     CloseLog();
     OpenLog(ParseFacility(retval));
     SetSyslogFacility(ParseFacility(retval));
 }
 
-/**************************************************************/
-
-void BannerBundle(Bundle *bp, Rlist *params)
-{
-    CfOut(cf_verbose, "", "\n");
-    CfOut(cf_verbose, "", "*****************************************************************\n");
-
-    if (VERBOSE || DEBUG)
-    {
-        printf("%s> BUNDLE %s", VPREFIX, bp->name);
-    }
-
-    if (params && (VERBOSE || DEBUG))
-    {
-        printf("(");
-        RlistShow(stdout, params);
-        printf(" )\n");
-    }
-    else
-    {
-        if (VERBOSE || DEBUG)
-            printf("\n");
-    }
-
-    CfOut(cf_verbose, "", "*****************************************************************\n");
-    CfOut(cf_verbose, "", "\n");
-
-}
-
-/*********************************************************************/
-
-static void CheckWorkingDirectories(const ReportContext *report_context)
+static void CheckWorkingDirectories(EvalContext *ctx)
 /* NOTE: We do not care about permissions (ACLs) in windows */
 {
     struct stat statbuf;
     char vbuff[CF_BUFSIZE];
 
-    CfDebug("CheckWorkingDirectories()\n");
-
     if (uname(&VSYSNAME) == -1)
     {
-        CfOut(cf_error, "uname", "!!! Couldn't get kernel name info!");
+        Log(LOG_LEVEL_ERR, "Couldn't get kernel name info. (uname: %s)", GetErrorStr());
         memset(&VSYSNAME, 0, sizeof(VSYSNAME));
     }
 
     snprintf(vbuff, CF_BUFSIZE, "%s%c.", CFWORKDIR, FILE_SEPARATOR);
-    MakeParentDirectory(vbuff, false, report_context);
+    MakeParentDirectory(vbuff, false);
 
-    CfOut(cf_verbose, "", "Making sure that locks are private...\n");
+    Log(LOG_LEVEL_VERBOSE, "Making sure that locks are private...");
 
     if (chown(CFWORKDIR, getuid(), getgid()) == -1)
     {
-        CfOut(cf_error, "chown", "Unable to set owner on %s to %ju.%ju", CFWORKDIR, (uintmax_t)getuid(), (uintmax_t)getgid());
+        Log(LOG_LEVEL_ERR, "Unable to set owner on '%s'' to '%ju.%ju'. (chown: %s)", CFWORKDIR, (uintmax_t)getuid(),
+            (uintmax_t)getgid(), GetErrorStr());
     }
 
-    if (cfstat(CFWORKDIR, &statbuf) != -1)
+    if (stat(CFWORKDIR, &statbuf) != -1)
     {
         /* change permissions go-w */
-        cf_chmod(CFWORKDIR, (mode_t) (statbuf.st_mode & ~022));
+        chmod(CFWORKDIR, (mode_t) (statbuf.st_mode & ~022));
     }
 
     snprintf(vbuff, CF_BUFSIZE, "%s%cstate%c.", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-    MakeParentDirectory(vbuff, false, report_context);
+    MakeParentDirectory(vbuff, false);
 
-    if (strlen(CFPRIVKEYFILE) == 0)
-    {
-        snprintf(CFPRIVKEYFILE, CF_BUFSIZE, "%s%cppkeys%clocalhost.priv", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        snprintf(CFPUBKEYFILE, CF_BUFSIZE, "%s%cppkeys%clocalhost.pub", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-    }
-
-    CfOut(cf_verbose, "", "Checking integrity of the state database\n");
+    Log(LOG_LEVEL_VERBOSE, "Checking integrity of the state database");
     snprintf(vbuff, CF_BUFSIZE, "%s%cstate", CFWORKDIR, FILE_SEPARATOR);
 
-    if (cfstat(vbuff, &statbuf) == -1)
+    if (stat(vbuff, &statbuf) == -1)
     {
         snprintf(vbuff, CF_BUFSIZE, "%s%cstate%c.", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        MakeParentDirectory(vbuff, false, report_context);
+        MakeParentDirectory(vbuff, false);
 
         if (chown(vbuff, getuid(), getgid()) == -1)
         {
-            CfOut(cf_error, "chown", "Unable to set owner on %s to %jd.%jd", vbuff, (uintmax_t)getuid(), (uintmax_t)getgid());
+            Log(LOG_LEVEL_ERR, "Unable to set owner on '%s' to '%jd.%jd'. (chown: %s)", vbuff,
+                (uintmax_t)getuid(), (uintmax_t)getgid(), GetErrorStr());
         }
 
-        cf_chmod(vbuff, (mode_t) 0755);
+        chmod(vbuff, (mode_t) 0755);
     }
     else
     {
 #ifndef __MINGW32__
         if (statbuf.st_mode & 022)
         {
-            CfOut(cf_error, "", "UNTRUSTED: State directory %s (mode %jo) was not private!\n", CFWORKDIR,
+            Log(LOG_LEVEL_ERR, "UNTRUSTED: State directory %s (mode %jo) was not private!", CFWORKDIR,
                   (uintmax_t)(statbuf.st_mode & 0777));
         }
 #endif /* !__MINGW32__ */
     }
 
-    CfOut(cf_verbose, "", "Checking integrity of the module directory\n");
+    Log(LOG_LEVEL_VERBOSE, "Checking integrity of the module directory");
 
     snprintf(vbuff, CF_BUFSIZE, "%s%cmodules", CFWORKDIR, FILE_SEPARATOR);
 
-    if (cfstat(vbuff, &statbuf) == -1)
+    if (stat(vbuff, &statbuf) == -1)
     {
         snprintf(vbuff, CF_BUFSIZE, "%s%cmodules%c.", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        MakeParentDirectory(vbuff, false, report_context);
+        MakeParentDirectory(vbuff, false);
 
         if (chown(vbuff, getuid(), getgid()) == -1)
         {
-            CfOut(cf_error, "chown", "Unable to set owner on %s to %ju.%ju", vbuff, (uintmax_t)getuid(), (uintmax_t)getgid());
+            Log(LOG_LEVEL_ERR, "Unable to set owner on '%s' to '%ju.%ju'. (chown: %s)", vbuff,
+                (uintmax_t)getuid(), (uintmax_t)getgid(), GetErrorStr());
         }
 
-        cf_chmod(vbuff, (mode_t) 0700);
+        chmod(vbuff, (mode_t) 0700);
     }
     else
     {
 #ifndef __MINGW32__
         if (statbuf.st_mode & 022)
         {
-            CfOut(cf_error, "", "UNTRUSTED: Module directory %s (mode %jo) was not private!\n", vbuff,
+            Log(LOG_LEVEL_ERR, "UNTRUSTED: Module directory %s (mode %jo) was not private!", vbuff,
                   (uintmax_t)(statbuf.st_mode & 0777));
         }
 #endif /* !__MINGW32__ */
     }
 
-    CfOut(cf_verbose, "", "Checking integrity of the PKI directory\n");
+    Log(LOG_LEVEL_VERBOSE, "Checking integrity of the PKI directory");
 
     snprintf(vbuff, CF_BUFSIZE, "%s%cppkeys", CFWORKDIR, FILE_SEPARATOR);
 
-    if (cfstat(vbuff, &statbuf) == -1)
+    if (stat(vbuff, &statbuf) == -1)
     {
         snprintf(vbuff, CF_BUFSIZE, "%s%cppkeys%c.", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-        MakeParentDirectory(vbuff, false, report_context);
+        MakeParentDirectory(vbuff, false);
 
-        cf_chmod(vbuff, (mode_t) 0700); /* Keys must be immutable to others */
+        chmod(vbuff, (mode_t) 0700); /* Keys must be immutable to others */
     }
     else
     {
 #ifndef __MINGW32__
         if (statbuf.st_mode & 077)
         {
-            FatalError("UNTRUSTED: Private key directory %s%cppkeys (mode %jo) was not private!\n", CFWORKDIR,
+            FatalError(ctx, "UNTRUSTED: Private key directory %s%cppkeys (mode %jo) was not private!\n", CFWORKDIR,
                        FILE_SEPARATOR, (uintmax_t)(statbuf.st_mode & 0777));
         }
 #endif /* !__MINGW32__ */
     }
 }
 
-/*******************************************************************/
-/* Level 2                                                         */
-/*******************************************************************/
 
-static char *InputLocation(const char *filename, const char *input_file)
+const char *GenericAgentResolveInputPath(const GenericAgentConfig *config, const char *input_file)
 {
-    static char wfilename[CF_BUFSIZE], path[CF_BUFSIZE];
+    static char input_path[CF_BUFSIZE];
 
-    if (MINUSF && (filename != input_file) && IsFileOutsideDefaultRepository(input_file)
-        && !IsAbsoluteFileName(filename))
+    switch (FilePathGetType(input_file))
     {
-        /* If -f assume included relative files are in same directory */
-        strncpy(path, input_file, CF_BUFSIZE - 1);
-        ChopLastNode(path);
-        snprintf(wfilename, CF_BUFSIZE - 1, "%s%c%s", path, FILE_SEPARATOR, filename);
-    }
-    else if (IsFileOutsideDefaultRepository(filename))
-    {
-        strncpy(wfilename, filename, CF_BUFSIZE - 1);
-    }
-    else
-    {
-        snprintf(wfilename, CF_BUFSIZE - 1, "%s%cinputs%c%s", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR, filename);
+    case FILE_PATH_TYPE_ABSOLUTE:
+        strlcpy(input_path, input_file, CF_BUFSIZE);
+        break;
+
+    case FILE_PATH_TYPE_NON_ANCHORED:
+    case FILE_PATH_TYPE_RELATIVE:
+        snprintf(input_path, CF_BUFSIZE, "%s%c%s", config->input_dir, FILE_SEPARATOR, input_file);
+        break;
     }
 
-    return MapName(wfilename);
+    return MapName(input_path);
 }
 
-/*******************************************************************/
-
-void CompilationReport(Policy *policy, char *fname)
-{
-#if defined(HAVE_NOVA)
-    ReportContext *compilation_report_context = Nova_OpenCompilationReportFiles(fname);
-#else
-    ReportContext *compilation_report_context = OpenCompilationReportFiles(fname);
-#endif
-
-    ShowPromises(compilation_report_context, REPORT_OUTPUT_TYPE_TEXT, policy->bundles, policy->bodies);
-
-    ReportContextDestroy(compilation_report_context);
-}
-
-/****************************************************************************/
-
-ReportContext *OpenCompilationReportFiles(const char *fname)
-{
-    char filename[CF_BUFSIZE];
-    FILE *freport_text = NULL;
-
-    snprintf(filename, CF_BUFSIZE - 1, "%s.txt", fname);
-    CfOut(cf_inform, "", "Summarizing promises as text to %s\n", filename);
-
-    if ((freport_text = fopen(filename, "w")) == NULL)
-    {
-        FatalError("Could not write output log to %s", filename);
-    }
-
-    ReportContext *context = ReportContextNew();
-    ReportContextAddWriter(context, REPORT_OUTPUT_TYPE_TEXT, FileWriter(freport_text));
-
-    return context;
-}
-
-/*******************************************************************/
-
-static void VerifyPromises(Policy *policy, GenericAgentConfig *config, const ReportContext *report_context)
+static void VerifyPromises(EvalContext *ctx, Policy *policy, GenericAgentConfig *config)
 {
 
 /* Now look once through ALL the bundles themselves */
@@ -1281,324 +1282,213 @@ static void VerifyPromises(Policy *policy, GenericAgentConfig *config, const Rep
     for (size_t i = 0; i < SeqLength(policy->bundles); i++)
     {
         Bundle *bp = SeqAt(policy->bundles, i);
+        EvalContextStackPushBundleFrame(ctx, bp, false);
 
-        const char *scope = bp->name;
-        THIS_BUNDLE = bp->name;
-
-        for (size_t j = 0; j < SeqLength(bp->subtypes); j++)
+        for (size_t j = 0; j < SeqLength(bp->promise_types); j++)
         {
-            SubType *sp = SeqAt(bp->subtypes, j);
+            PromiseType *sp = SeqAt(bp->promise_types, j);
 
             for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
             {
                 Promise *pp = SeqAt(sp->promises, ppi);
-                ExpandPromise(AGENT_TYPE_COMMON, scope, pp, NULL, report_context);
+                ExpandPromise(ctx, pp, CommonEvalPromise, NULL);
             }
         }
+
+        EvalContextStackPopFrame(ctx);
     }
 
-    HashVariables(policy, NULL, report_context);
-    HashControls(policy, config);
+    PolicyHashVariables(ctx, policy);
+    HashControls(ctx, policy, config);
 
     // TODO: need to move this inside PolicyCheckRunnable eventually.
     if (!config->bundlesequence && config->check_runnable)
     {
-        // only verify policy-defined bundlesequence for cf-agent, cf-know, cf-promises, cf-gendoc
-        if ((THIS_AGENT_TYPE == AGENT_TYPE_AGENT) ||
-            (THIS_AGENT_TYPE == AGENT_TYPE_KNOW) ||
-            (THIS_AGENT_TYPE == AGENT_TYPE_COMMON) ||
-            (THIS_AGENT_TYPE == AGENT_TYPE_GENDOC))
+        // only verify policy-defined bundlesequence for cf-agent, cf-promises, cf-gendoc
+        if ((config->agent_type == AGENT_TYPE_AGENT) ||
+            (config->agent_type == AGENT_TYPE_COMMON) ||
+            (config->agent_type == AGENT_TYPE_GENDOC))
         {
-            if (!VerifyBundleSequence(policy, config))
+            if (!VerifyBundleSequence(ctx, policy, config))
             {
-                FatalError("Errors in promise bundles");
+                FatalError(ctx, "Errors in promise bundles");
             }
         }
     }
-}
-
-/********************************************************************/
-
-static void PrependAuditFile(char *file)
-{
-    struct stat statbuf;
-
-    AUDITPTR = xmalloc(sizeof(Audit));
-
-    if (cfstat(file, &statbuf) == -1)
-    {
-        /* shouldn't happen */
-        return;
-    }
-
-    HashFile(file, AUDITPTR->digest, CF_DEFAULT_DIGEST);
-
-    AUDITPTR->next = VAUDIT;
-    AUDITPTR->filename = xstrdup(file);
-    AUDITPTR->date = xstrdup(cf_ctime(&statbuf.st_mtime));
-    if (Chop(AUDITPTR->date, CF_EXPANDSIZE) == -1)
-    {
-        CfOut(cf_error, "", "Chop was called on a string that seemed to have no terminator");
-    }
-    AUDITPTR->version = NULL;
-    VAUDIT = AUDITPTR;
 }
 
 /*******************************************************************/
 /* Level 3                                                         */
 /*******************************************************************/
 
-static void CheckVariablePromises(char *scope, Seq *var_promises)
+static void CheckVariablePromises(EvalContext *ctx, Seq *var_promises)
 {
     int allow_redefine = false;
-
-    CfDebug("CheckVariablePromises()\n");
 
     for (size_t i = 0; i < SeqLength(var_promises); i++)
     {
         Promise *pp = SeqAt(var_promises, i);
-        ConvergeVarHashPromise(scope, pp, allow_redefine);
+        VerifyVarPromise(ctx, pp, allow_redefine);
     }
 }
 
 /*******************************************************************/
 
-static void CheckCommonClassPromises(Seq *class_promises, const ReportContext *report_context)
+static void CheckCommonClassPromises(EvalContext *ctx, Seq *class_promises)
 {
-    CfOut(cf_verbose, "", " -> Checking common class promises...\n");
+    Log(LOG_LEVEL_VERBOSE, "Checking common class promises...");
 
     for (size_t i = 0; i < SeqLength(class_promises); i++)
     {
         Promise *pp = SeqAt(class_promises, i);
-        ExpandPromise(AGENT_TYPE_AGENT, THIS_BUNDLE, pp, KeepClassContextPromise, report_context);
+
+        char *sp = NULL;
+        if (VarClassExcluded(ctx, pp, &sp))
+        {
+            if (LEGACY_OUTPUT)
+            {
+                Log(LOG_LEVEL_VERBOSE, "\n");
+                Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
+                Log(LOG_LEVEL_VERBOSE, "Skipping whole next promise (%s), as var-context %s is not relevant", pp->promiser, sp);
+                Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
+            }
+            else
+            {
+                Log(LOG_LEVEL_VERBOSE, "Skipping next promise '%s', as var-context '%s' is not relevant", pp->promiser, sp);
+            }
+            continue;
+        }
+
+        ExpandPromise(ctx, pp, VerifyClassPromise, NULL);
     }
 }
 
 /*******************************************************************/
 
-static void CheckControlPromises(GenericAgentConfig *config, char *scope, char *agent, Seq *controllist)
+static void CheckControlPromises(EvalContext *ctx, GenericAgentConfig *config, const Body *control_body)
 {
-    const BodySyntax *bp = NULL;
-    Rlist *rp;
+    const ConstraintSyntax *body_syntax = NULL;
     Rval returnval;
 
-    CfDebug("CheckControlPromises(%s)\n", agent);
+    assert(strcmp(control_body->name, "control") == 0);
 
-    for (int i = 0; CF_ALL_BODIES[i].bs != NULL; i++)
+    for (int i = 0; CONTROL_BODIES[i].constraints != NULL; i++)
     {
-        bp = CF_ALL_BODIES[i].bs;
+        body_syntax = CONTROL_BODIES[i].constraints;
 
-        if (strcmp(agent, CF_ALL_BODIES[i].bundle_type) == 0)
+        if (strcmp(control_body->type, CONTROL_BODIES[i].body_type) == 0)
         {
             break;
         }
     }
 
-    if (bp == NULL)
+    if (body_syntax == NULL)
     {
-        FatalError("Unknown agent");
+        FatalError(ctx, "Unknown agent");
     }
 
-    for (size_t i = 0; i < SeqLength(controllist); i++)
-    {
-        Constraint *cp = SeqAt(controllist, i);
+    char scope[CF_BUFSIZE];
+    snprintf(scope, CF_BUFSIZE, "%s_%s", control_body->name, control_body->type);
+    Log(LOG_LEVEL_DEBUG, "Initiate control variable convergence for scope '%s'", scope);
 
-        if (IsExcluded(cp->classes, NULL))
+    EvalContextStackPushBodyFrame(ctx, control_body);
+
+    for (size_t i = 0; i < SeqLength(control_body->conlist); i++)
+    {
+        Constraint *cp = SeqAt(control_body->conlist, i);
+
+        if (!IsDefinedClass(ctx, cp->classes, NULL))
         {
             continue;
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[cfg_bundlesequence].lval) == 0)
+        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_BUNDLESEQUENCE].lval) == 0)
         {
-            returnval = ExpandPrivateRval(CONTEXTID, cp->rval);
+            returnval = ExpandPrivateRval(ctx, scope, cp->rval);
         }
         else
         {
-            returnval = EvaluateFinalRval(CONTEXTID, cp->rval, true, NULL);
+            returnval = EvaluateFinalRval(ctx, scope, cp->rval, true, NULL);
         }
 
-        DeleteVariable(scope, cp->lval);
+        ScopeDeleteVariable(scope, cp->lval);
 
-        if (!AddVariableHash(scope, cp->lval, returnval,
-                             GetControlDatatype(cp->lval, bp), cp->audit->filename, cp->offset.line))
+        if (!EvalContextVariablePut(ctx, (VarRef) { NULL, scope, cp->lval }, returnval, ConstraintSyntaxGetDataType(body_syntax, cp->lval)))
         {
-            CfOut(cf_error, "", " !! Rule from %s at/before line %zu\n", cp->audit->filename, cp->offset.line);
+            Log(LOG_LEVEL_ERR, "Rule from %s at/before line %zu", control_body->source_path, cp->offset.line);
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[cfg_output_prefix].lval) == 0)
+        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_OUTPUT_PREFIX].lval) == 0)
         {
             strncpy(VPREFIX, returnval.item, CF_MAXVARSIZE);
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[cfg_domain].lval) == 0)
+        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_DOMAIN].lval) == 0)
         {
             strcpy(VDOMAIN, cp->rval.item);
-            CfOut(cf_verbose, "", "SET domain = %s\n", VDOMAIN);
-            DeleteScalar("sys", "domain");
-            DeleteScalar("sys", "fqhost");
+            Log(LOG_LEVEL_VERBOSE, "SET domain = %s", VDOMAIN);
+            ScopeDeleteSpecial("sys", "domain");
+            ScopeDeleteSpecial("sys", "fqhost");
             snprintf(VFQNAME, CF_MAXVARSIZE, "%s.%s", VUQNAME, VDOMAIN);
-            NewScalar("sys", "fqhost", VFQNAME, DATA_TYPE_STRING);
-            NewScalar("sys", "domain", VDOMAIN, DATA_TYPE_STRING);
-            DeleteClass("undefined_domain", NULL);
-            HardClass(VDOMAIN);
+            ScopeNewSpecial(ctx, "sys", "fqhost", VFQNAME, DATA_TYPE_STRING);
+            ScopeNewSpecial(ctx, "sys", "domain", VDOMAIN, DATA_TYPE_STRING);
+            EvalContextHeapAddHard(ctx, VDOMAIN);
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[cfg_ignore_missing_inputs].lval) == 0)
+        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_IGNORE_MISSING_INPUTS].lval) == 0)
         {
-            CfOut(cf_verbose, "", "SET ignore_missing_inputs %s\n", RvalScalarValue(cp->rval));
-            config->ignore_missing_inputs = GetBoolean(cp->rval.item);
+            Log(LOG_LEVEL_VERBOSE, "SET ignore_missing_inputs %s", RvalScalarValue(cp->rval));
+            config->ignore_missing_inputs = BooleanFromString(cp->rval.item);
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[cfg_ignore_missing_bundles].lval) == 0)
+        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_IGNORE_MISSING_BUNDLES].lval) == 0)
         {
-            CfOut(cf_verbose, "", "SET ignore_missing_bundles %s\n", RvalScalarValue(cp->rval));
-            config->ignore_missing_bundles = GetBoolean(cp->rval.item);
+            Log(LOG_LEVEL_VERBOSE, "SET ignore_missing_bundles %s", RvalScalarValue(cp->rval));
+            config->ignore_missing_bundles = BooleanFromString(cp->rval.item);
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[cfg_goalpatterns].lval) == 0)
+        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_GOALPATTERNS].lval) == 0)
         {
-            GOALS = NULL;
-            for (rp = (Rlist *) returnval.item; rp != NULL; rp = rp->next)
-            {
-                RlistPrependScalar(&GOALS, rp->item, RVAL_TYPE_SCALAR);
-            }
-            CfOut(cf_verbose, "", "SET goal_patterns list\n");
+            /* Ignored */
             continue;
         }
         
         RvalDestroy(returnval);
     }
+
+    EvalContextStackPopFrame(ctx);
 }
 
 /*******************************************************************/
 
-void Syntax(const char *component, const struct option options[], const char *hints[], const char *id)
+void PrintHelp(const char *component, const struct option options[], const char *hints[], bool accepts_file_argument)
 {
-    int i;
+    printf("Usage: %s [OPTION]...%s\n", component, accepts_file_argument ? " [FILE]" : "");
 
-    printf("\n\n%s\n\n", component);
+    printf("\nOptions:\n");
 
-    printf("SYNOPSIS:\n\n   program [options]\n\nDESCRIPTION:\n\n%s\n", id);
-    printf("Command line options:\n\n");
-
-    for (i = 0; options[i].name != NULL; i++)
+    for (int i = 0; options[i].name != NULL; i++)
     {
         if (options[i].has_arg)
         {
-            printf("--%-12s, -%c value - %s\n", options[i].name, (char) options[i].val, hints[i]);
+            printf("  --%-12s, -%c value - %s\n", options[i].name, (char) options[i].val, hints[i]);
         }
         else
         {
-            printf("--%-12s, -%-7c - %s\n", options[i].name, (char) options[i].val, hints[i]);
+            printf("  --%-12s, -%-7c - %s\n", options[i].name, (char) options[i].val, hints[i]);
         }
     }
 
-    printf("\nBug reports: http://bug.cfengine.com, ");
-    printf("Community help: http://forum.cfengine.com\n");
-    printf("Community info: http://www.cfengine.com/pages/community, ");
-    printf("Support services: http://www.cfengine.com\n\n");
+    printf("\nWebsite: http://www.cfengine.com\n");
     printf("This software is Copyright (C) 2008,2010-present CFEngine AS.\n");
 }
 
-/*******************************************************************/
-
-void ManPage(const char *component, const struct option options[], const char *hints[], const char *id)
+void PrintVersion(void)
 {
-    int i;
-
-    printf(".TH %s 8 \"Maintenance Commands\"\n", GetArg0(component));
-    printf(".SH NAME\n%s\n\n", component);
-
-    printf(".SH SYNOPSIS:\n\n %s [options]\n\n.SH DESCRIPTION:\n\n%s\n", GetArg0(component), id);
-
-    printf(".B cfengine\n"
-           "is a self-healing configuration and change management based system. You can think of"
-           ".B cfengine\n"
-           "as a very high level language, much higher level than Perl or shell. A"
-           "single statement is called a promise, and compliance can result in many hundreds of files"
-           "being created, or the permissions of many hundreds of"
-           "files being set. The idea of "
-           ".B cfengine\n"
-           "is to create a one or more sets of configuration files which will"
-           "classify and describe the setup of every host in a network.\n");
-
-    printf(".SH COMMAND LINE OPTIONS:\n");
-
-    for (i = 0; options[i].name != NULL; i++)
-    {
-        if (options[i].has_arg)
-        {
-            printf(".IP \"--%s, -%c\" value\n%s\n", options[i].name, (char) options[i].val, hints[i]);
-        }
-        else
-        {
-            printf(".IP \"--%s, -%c\"\n%s\n", options[i].name, (char) options[i].val, hints[i]);
-        }
-    }
-
-    printf(".SH AUTHOR\n" "Mark Burgess and CFEngine AS\n" ".SH INFORMATION\n");
-
-    printf("\nBug reports: http://bug.cfengine.com, ");
-    printf(".pp\nCommunity help: http://forum.cfengine.com\n");
-    printf(".pp\nCommunity info: http://www.cfengine.com/pages/community\n");
-    printf(".pp\nSupport services: http://www.cfengine.com\n");
-    printf(".pp\nThis software is Copyright (C) 2008-%d CFEngine AS.\n", BUILD_YEAR);
-}
-
-/*******************************************************************/
-
-static const char *banner_lines[] =
-{
-    "   @@@      ",
-    "   @@@      ",
-    "            ",
-    " @ @@@ @    ",
-    " @ @@@ @    ",
-    " @ @@@ @    ",
-    " @     @    ",
-    "   @@@      ",
-    "   @ @      ",
-    "   @ @      ",
-    "   @ @      ",
-    NULL
-};
-
-static void AgentBanner(const char **text)
-{
-    const char **b = banner_lines;
-
-    while (*b)
-    {
-        printf("%s%s\n", *b, *text ? *text : "");
-        b++;
-        if (*text)
-        {
-            text++;
-        }
-    }
-}
-
-/*******************************************************************/
-
-void PrintVersionBanner(const char *component)
-{
-    const char *text[] =
-{
-        "",
-        component,
-        "",
-        NameVersion(),
+    printf("%s\n", NameVersion());
 #ifdef HAVE_NOVA
-        Nova_NameVersion(),
+    printf("%s\n", Nova_NameVersion());
 #endif
-        NULL
-    };
-
-    printf("\n");
-    AgentBanner(text);
-    printf("\n");
-    printf("Copyright (C) CFEngine AS 2008-%d\n", BUILD_YEAR);
-    printf("See Licensing at http://cfengine.com/3rdpartylicenses\n");
 }
 
 /*******************************************************************/
@@ -1623,7 +1513,7 @@ static void CleanPidFile(void)
     {
         if (errno != ENOENT)
         {
-            CfOut(cf_error, "unlink", "Unable to remove pid file");
+            Log(LOG_LEVEL_ERR, "Unable to remove pid file '%s'. (unlink: %s)", PIDFILE, GetErrorStr());
         }
     }
 }
@@ -1647,7 +1537,7 @@ void WritePID(char *filename)
 
     if ((fp = fopen(PIDFILE, "w")) == NULL)
     {
-        CfOut(cf_inform, "fopen", "Could not write to PID file %s\n", filename);
+        Log(LOG_LEVEL_INFO, "Could not write to PID file '%s'. (fopen: %s)", filename, GetErrorStr());
         return;
     }
 
@@ -1658,53 +1548,61 @@ void WritePID(char *filename)
 
 /*******************************************************************/
 
-void HashVariables(Policy *policy, const char *name, const ReportContext *report_context)
+void BundleHashVariables(EvalContext *ctx, Bundle *bundle)
 {
-    CfOut(cf_verbose, "", "Initiate variable convergence...\n");
+    Log(LOG_LEVEL_VERBOSE, "Resolving variables in bundle '%s'", bundle->name);
+
+    for (size_t j = 0; j < SeqLength(bundle->promise_types); j++)
+    {
+        PromiseType *sp = SeqAt(bundle->promise_types, j);
+
+        if (strcmp(bundle->type, "common") == 0 && strcmp(sp->name, "classes") == 0)
+        {
+            CheckCommonClassPromises(ctx, sp->promises);
+        }
+    }
+
+    for (size_t j = 0; j < SeqLength(bundle->promise_types); j++)
+    {
+        PromiseType *sp = SeqAt(bundle->promise_types, j);
+
+        if (strcmp(sp->name, "vars") == 0)
+        {
+            CheckVariablePromises(ctx, sp->promises);
+        }
+    }
+
+}
+
+void PolicyHashVariables(EvalContext *ctx, Policy *policy)
+{
+    for (size_t i = 0; i < SeqLength(policy->bundles); i++)
+    {
+        Bundle *bundle = SeqAt(policy->bundles, i);
+        if (strcmp("common", bundle->type) == 0)
+        {
+            EvalContextStackPushBundleFrame(ctx, bundle, false);
+            BundleHashVariables(ctx, bundle);
+            EvalContextStackPopFrame(ctx);
+        }
+    }
 
     for (size_t i = 0; i < SeqLength(policy->bundles); i++)
     {
-        Bundle *bp = SeqAt(policy->bundles, i);
-
-        if (name && strcmp(name, bp->name) != 0)
+        Bundle *bundle = SeqAt(policy->bundles, i);
+        if (strcmp("common", bundle->type) != 0)
         {
-            continue;
-        }
-
-        SetNewScope(bp->name);
-        char scope[CF_BUFSIZE];
-        snprintf(scope,CF_BUFSIZE,"%s_meta", bp->name);
-        NewScope(scope);
-
-        // TODO: seems sketchy, investigate purpose.
-        THIS_BUNDLE = bp->name;
-
-        for (size_t j = 0; j < SeqLength(bp->subtypes); j++)
-        {
-            SubType *sp = SeqAt(bp->subtypes, j);
-
-            if (strcmp(sp->name, "vars") == 0)
-            {
-                CheckVariablePromises(bp->name, sp->promises);
-            }
-
-            // We must also set global classes here?
-
-            if (strcmp(bp->type, "common") == 0 && strcmp(sp->name, "classes") == 0)
-            {
-                CheckCommonClassPromises(sp->promises, report_context);
-            }
-
+            EvalContextStackPushBundleFrame(ctx, bundle, false);
+            BundleHashVariables(ctx, bundle);
+            EvalContextStackPopFrame(ctx);
         }
     }
 }
 
 /*******************************************************************/
 
-void HashControls(const Policy *policy, GenericAgentConfig *config)
+void HashControls(EvalContext *ctx, const Policy *policy, GenericAgentConfig *config)
 {
-    char buf[CF_BUFSIZE];
-
 /* Only control bodies need to be hashed like variables */
 
     for (size_t i = 0; i < SeqLength(policy->bodies); i++)
@@ -1713,18 +1611,14 @@ void HashControls(const Policy *policy, GenericAgentConfig *config)
 
         if (strcmp(bdp->name, "control") == 0)
         {
-            snprintf(buf, CF_BUFSIZE, "%s_%s", bdp->name, bdp->type);
-            CfDebug("Initiate control variable convergence...%s\n", buf);
-            DeleteScope(buf);
-            SetNewScope(buf);
-            CheckControlPromises(config, buf, bdp->type, bdp->conlist);
+            CheckControlPromises(ctx, config, bdp);
         }
     }
 }
 
 /********************************************************************/
 
-static bool VerifyBundleSequence(const Policy *policy, const GenericAgentConfig *config)
+static bool VerifyBundleSequence(EvalContext *ctx, const Policy *policy, const GenericAgentConfig *config)
 {
     Rlist *rp;
     char *name;
@@ -1732,15 +1626,15 @@ static bool VerifyBundleSequence(const Policy *policy, const GenericAgentConfig 
     int ok = true;
     FnCall *fp;
 
-    if (GetVariable("control_common", "bundlesequence", &retval) == DATA_TYPE_NONE)
+    if (!EvalContextVariableControlCommonGet(ctx, COMMON_CONTROL_BUNDLESEQUENCE, &retval))
     {
-        CfOut(cf_error, "", " !!! No bundlesequence in the common control body");
+        Log(LOG_LEVEL_ERR, " No bundlesequence in the common control body");
         return false;
     }
 
     if (retval.type != RVAL_TYPE_LIST)
     {
-        FatalError("Promised bundlesequence was not a list");
+        FatalError(ctx, "Promised bundlesequence was not a list");
     }
 
     for (rp = (Rlist *) retval.item; rp != NULL; rp = rp->next)
@@ -1758,10 +1652,15 @@ static bool VerifyBundleSequence(const Policy *policy, const GenericAgentConfig 
 
         default:
             name = NULL;
-            CfOut(cf_error, "", "Illegal item found in bundlesequence: ");
-            RvalShow(stdout, (Rval) {rp->item, rp->type});
-            printf(" = %c\n", rp->type);
             ok = false;
+            {
+                Writer *w = StringWriter();
+                WriterWrite(w, "Illegal item found in bundlesequence '");
+                RvalWrite(w, (Rval) {rp->item, rp->type});
+                WriterWrite(w, "'");
+                Log(LOG_LEVEL_ERR, "%s", StringWriterData(w));
+                WriterClose(w);
+            }
             break;
         }
 
@@ -1772,7 +1671,7 @@ static bool VerifyBundleSequence(const Policy *policy, const GenericAgentConfig 
 
         if (!config->ignore_missing_bundles && !PolicyGetBundle(policy, NULL, NULL, name))
         {
-            CfOut(cf_error, "", "Bundle \"%s\" listed in the bundlesequence is not a defined bundle\n", name);
+            Log(LOG_LEVEL_ERR, "Bundle '%s' listed in the bundlesequence is not a defined bundle", name);
             ok = false;
         }
     }
@@ -1780,7 +1679,96 @@ static bool VerifyBundleSequence(const Policy *policy, const GenericAgentConfig 
     return ok;
 }
 
-/*******************************************************************/
+
+bool GenericAgentConfigParseArguments(GenericAgentConfig *config, int argc, char **argv)
+{
+    if (argc == 0)
+    {
+        return true;
+    }
+
+    if (argc > 1)
+    {
+        return false;
+    }
+
+    GenericAgentConfigSetInputFile(config, NULL, argv[0]);
+    MINUSF = true;
+    return true;
+}
+
+bool GenericAgentConfigParseWarningOptions(GenericAgentConfig *config, const char *warning_options)
+{
+    if (strlen(warning_options) == 0)
+    {
+        return false;
+    }
+
+    if (strcmp("error", warning_options) == 0)
+    {
+        config->agent_specific.common.parser_warnings_error |= PARSER_WARNING_ALL;
+        return true;
+    }
+
+    const char *options_start = warning_options;
+    bool warnings_as_errors = false;
+
+    if (StringStartsWith(warning_options, "error="))
+    {
+        options_start = warning_options + strlen("error=");
+        warnings_as_errors = true;
+    }
+
+    StringSet *warnings_set = StringSetFromString(options_start, ',');
+    StringSetIterator it = StringSetIteratorInit(warnings_set);
+    const char *warning_str = NULL;
+    while ((warning_str = StringSetIteratorNext(&it)))
+    {
+        int warning = ParserWarningFromString(warning_str);
+        if (warning == -1)
+        {
+            Log(LOG_LEVEL_ERR, "Unrecognized warning '%s'", warning_str);
+            StringSetDestroy(warnings_set);
+            return false;
+        }
+
+        if (warnings_as_errors)
+        {
+            config->agent_specific.common.parser_warnings_error |= warning;
+        }
+        else
+        {
+            config->agent_specific.common.parser_warnings |= warning;
+        }
+    }
+
+    StringSetDestroy(warnings_set);
+    return true;
+}
+
+bool GenericAgentConfigParseColor(GenericAgentConfig *config, const char *mode)
+{
+    if (!mode || strcmp("auto", mode) == 0)
+    {
+        config->color = config->tty_interactive;
+        return true;
+    }
+    else if (strcmp("always", mode) == 0)
+    {
+        config->color = true;
+        return true;
+    }
+    else if (strcmp("never", mode) == 0)
+    {
+        config->color = false;
+        return true;
+    }
+    else
+    {
+        Log(LOG_LEVEL_ERR, "Unrecognized color mode '%s'", mode);
+        return false;
+    }
+}
 
 GenericAgentConfig *GenericAgentConfigNewDefault(AgentType agent_type)
 {
@@ -1788,15 +1776,26 @@ GenericAgentConfig *GenericAgentConfigNewDefault(AgentType agent_type)
 
     config->agent_type = agent_type;
 
+    // TODO: system state, perhaps pull out as param
+    config->tty_interactive = isatty(0) && isatty(1);
+
+    config->color = false;
+
     config->bundlesequence = NULL;
+
+    config->original_input_file = NULL;
     config->input_file = NULL;
-    config->check_not_writable_by_others = agent_type != AGENT_TYPE_COMMON;
+    config->input_dir = NULL;
+
+    config->check_not_writable_by_others = agent_type != AGENT_TYPE_COMMON && !config->tty_interactive;
     config->check_runnable = agent_type != AGENT_TYPE_COMMON;
     config->ignore_missing_bundles = false;
     config->ignore_missing_inputs = false;
 
-    // TODO: system state, perhaps pull out as param
-    config->tty_interactive = isatty(0) && isatty(1);
+    config->heap_soft = NULL;
+    config->heap_negated = NULL;
+
+    config->agent_specific.agent.bootstrap_policy_server = NULL;
 
     switch (agent_type)
     {
@@ -1816,14 +1815,94 @@ void GenericAgentConfigDestroy(GenericAgentConfig *config)
     if (config)
     {
         RlistDestroy(config->bundlesequence);
+        StringSetDestroy(config->heap_soft);
+        StringSetDestroy(config->heap_negated);
         free(config->input_file);
     }
 }
 
-void GenericAgentConfigSetInputFile(GenericAgentConfig *config, const char *input_file)
+void GenericAgentConfigApply(EvalContext *ctx, const GenericAgentConfig *config)
 {
+    if (config->heap_soft)
+    {
+        StringSetIterator it = StringSetIteratorInit(config->heap_soft);
+        const char *context = NULL;
+        while ((context = StringSetIteratorNext(&it)))
+        {
+            if (EvalContextHeapContainsHard(ctx, context))
+            {
+                FatalError(ctx, "cfengine: You cannot use -D to define a reserved class!");
+            }
+
+            EvalContextHeapAddSoft(ctx, context, NULL);
+        }
+    }
+
+    if (config->heap_negated)
+    {
+        StringSetIterator it = StringSetIteratorInit(config->heap_negated);
+        const char *context = NULL;
+        while ((context = StringSetIteratorNext(&it)))
+        {
+            if (EvalContextHeapContainsHard(ctx, context))
+            {
+                FatalError(ctx, "Cannot negate the reserved class [%s]\n", context);
+            }
+
+            EvalContextHeapAddNegated(ctx, context);
+        }
+    }
+
+    switch (LogGetGlobalLevel())
+    {
+    case LOG_LEVEL_DEBUG:
+        EvalContextHeapAddHard(ctx, "debug_mode");
+        EvalContextHeapAddHard(ctx, "opt_debug");
+        // intentional fall
+    case LOG_LEVEL_VERBOSE:
+        EvalContextHeapAddHard(ctx, "verbose_mode");
+        // intentional fall
+    case LOG_LEVEL_INFO:
+        EvalContextHeapAddHard(ctx, "inform_mode");
+        break;
+    default:
+        break;
+    }
+
+    if (config->agent_specific.agent.bootstrap_policy_server)
+    {
+        EvalContextHeapAddHard(ctx, "bootstrap_mode");
+    }
+
+    if (config->color)
+    {
+        LoggingSetColor(config->color);
+    }
+}
+
+void GenericAgentConfigSetInputFile(GenericAgentConfig *config, const char *workdir, const char *input_file)
+{
+    free(config->original_input_file);
     free(config->input_file);
-    config->input_file = SafeStringDuplicate(input_file);
+    free(config->input_dir);
+
+    config->original_input_file = xstrdup(input_file);
+
+    if (workdir && FilePathGetType(input_file) == FILE_PATH_TYPE_NON_ANCHORED)
+    {
+        config->input_file = StringFormat("%s%cinputs%c%s", workdir, FILE_SEPARATOR, FILE_SEPARATOR, input_file);
+    }
+    else
+    {
+        config->input_file = xstrdup(input_file);
+    }
+
+    config->input_dir = xstrdup(config->input_file);
+    if (!ChopLastNode(config->input_dir))
+    {
+        free(config->input_dir);
+        config->input_dir = xstrdup(".");
+    }
 }
 
 void GenericAgentConfigSetBundleSequence(GenericAgentConfig *config, const Rlist *bundlesequence)

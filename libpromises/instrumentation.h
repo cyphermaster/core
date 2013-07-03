@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,10 +17,9 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
 #ifndef CFENGINE_INSTRUMENTATION_H
@@ -28,11 +27,14 @@
 
 #include "cf3.defs.h"
 
-#include "alphalist.h"
+#include "set.h"
 
 struct timespec BeginMeasure(void);
 void EndMeasure(char *eventname, struct timespec start);
-void EndMeasurePromise(struct timespec start, Promise *pp);
-void NoteClassUsage(AlphaList list, int purge);
+int EndMeasureValueMs(struct timespec start);
+void EndMeasurePromise(EvalContext *ctx, struct timespec start, Promise *pp);
+
+// TODO: temporary measure until all heaps are under EvalContext
+void NoteClassUsage(StringSetIterator context_iterator, int purge);
 
 #endif

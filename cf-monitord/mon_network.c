@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -29,16 +29,50 @@
 #include "files_names.h"
 #include "files_interfaces.h"
 #include "files_lib.h"
-#include "cfstream.h"
 #include "pipes.h"
-#include "logging.h"
 
 /* Globals */
 
 Item *ALL_INCOMING;
 Item *MON_UDP4 = NULL, *MON_UDP6 = NULL, *MON_TCP4 = NULL, *MON_TCP6 = NULL;
 
-static const char *VNETSTAT[HARD_CLASSES_MAX] =
+/*******************************************************************/
+/* Anomaly                                                         */
+/*******************************************************************/
+
+typedef struct
+{
+    char *portnr;
+    char *name;
+    enum observables in;
+    enum observables out;
+} Sock;
+
+static const Sock ECGSOCKS[ATTR] =     /* extended to map old to new using enum */
+{
+    {"137", "netbiosns", ob_netbiosns_in, ob_netbiosns_out},
+    {"138", "netbiosdgm", ob_netbiosdgm_in, ob_netbiosdgm_out},
+    {"139", "netbiosssn", ob_netbiosssn_in, ob_netbiosssn_out},
+    {"445", "microsoft_ds", ob_microsoft_ds_in, ob_microsoft_ds_out},
+    {"5308", "cfengine", ob_cfengine_in, ob_cfengine_out},
+    {"2049", "nfsd", ob_nfsd_in, ob_nfsd_out},
+    {"25", "smtp", ob_smtp_in, ob_smtp_out},
+    {"80", "www", ob_www_in, ob_www_out},
+    {"8080", "www-alt", ob_www_alt_in, ob_www_alt_out},
+    {"21", "ftp", ob_ftp_in, ob_ftp_out},
+    {"22", "ssh", ob_ssh_in, ob_ssh_out},
+    {"443", "wwws", ob_wwws_in, ob_wwws_out},
+    {"143", "imap", ob_imap_in, ob_imap_out},
+    {"993", "imaps", ob_imaps_in, ob_imaps_out},
+    {"389", "ldap", ob_ldap_in, ob_ldap_out},
+    {"636", "ldaps", ob_ldaps_in, ob_ldaps_out},
+    {"27017", "mongo", ob_mongo_in, ob_mongo_out},
+    {"3306", "mysql", ob_mysql_in, ob_mysql_out},
+    {"5432", "postgresql", ob_postgresql_in, ob_postgresql_out},
+    {"631", "ipp", ob_ipp_in, ob_ipp_out},
+};
+
+static const char *VNETSTAT[PLATFORM_CONTEXT_MAX] =
 {
     "-",
     "/usr/bin/netstat -rn",     /* hpux */
@@ -147,8 +181,6 @@ void MonNetworkGatherData(double *cf_this)
     enum cf_netstat_type { cfn_new, cfn_old } type = cfn_new;
     enum cf_packet_type { cfn_udp4, cfn_udp6, cfn_tcp4, cfn_tcp6} packet = cfn_tcp4;
 
-    CfDebug("GatherSocketData()\n");
-
     for (i = 0; i < ATTR; i++)
     {
         in[i] = out[i] = NULL;
@@ -161,19 +193,29 @@ void MonNetworkGatherData(double *cf_this)
 
     strcat(comm, " -an");
 
-    if ((pp = cf_popen(comm, "r")) == NULL)
+    if ((pp = cf_popen(comm, "r", true)) == NULL)
     {
+        /* FIXME: no logging */
         return;
     }
 
-    while (!feof(pp))
+    for (;;)
     {
         memset(local, 0, CF_BUFSIZE);
         memset(remote, 0, CF_BUFSIZE);
 
-        if (CfReadLine(vbuff, CF_BUFSIZE, pp) == -1)
+        size_t res = CfReadLine(vbuff, CF_BUFSIZE, pp);
+
+        if (res == 0)
         {
-            FatalError("Error in CfReadLine");
+            break;
+        }
+
+        if (res == -1)
+        {
+            /* FIXME: no logging */
+            cf_pclose(pp);
+            return;
         }
 
         if (strstr(vbuff, "UNIX"))
@@ -334,13 +376,13 @@ void MonNetworkGatherData(double *cf_this)
         struct stat statbuf;
         time_t now = time(NULL);
 
-        CfDebug("save incoming %s\n", ECGSOCKS[i].name);
+        Log(LOG_LEVEL_DEBUG, "save incoming '%s'", ECGSOCKS[i].name);
         snprintf(vbuff, CF_MAXVARSIZE, "%s/state/cf_incoming.%s", CFWORKDIR, ECGSOCKS[i].name);
-        if (cfstat(vbuff, &statbuf) != -1)
+        if (stat(vbuff, &statbuf) != -1)
         {
             if ((ByteSizeList(in[i]) < statbuf.st_size) && (now < statbuf.st_mtime + 40 * 60))
             {
-                CfOut(cf_verbose, "", "New state %s is smaller, retaining old for 40 mins longer\n", ECGSOCKS[i].name);
+                Log(LOG_LEVEL_VERBOSE, "New state '%s' is smaller, retaining old for 40 mins longer", ECGSOCKS[i].name);
                 DeleteItemList(in[i]);
                 continue;
             }
@@ -349,7 +391,7 @@ void MonNetworkGatherData(double *cf_this)
         SetNetworkEntropyClasses(CanonifyName(ECGSOCKS[i].name), "in", in[i]);
         RawSaveItemList(in[i], vbuff);
         DeleteItemList(in[i]);
-        CfDebug("Saved in netstat data in %s\n", vbuff);
+        Log(LOG_LEVEL_DEBUG, "Saved in netstat data in '%s'", vbuff);
     }
 
     for (i = 0; i < ATTR; i++)
@@ -357,14 +399,14 @@ void MonNetworkGatherData(double *cf_this)
         struct stat statbuf;
         time_t now = time(NULL);
 
-        CfDebug("save outgoing %s\n", ECGSOCKS[i].name);
+        Log(LOG_LEVEL_DEBUG, "save outgoing '%s'", ECGSOCKS[i].name);
         snprintf(vbuff, CF_MAXVARSIZE, "%s/state/cf_outgoing.%s", CFWORKDIR, ECGSOCKS[i].name);
 
-        if (cfstat(vbuff, &statbuf) != -1)
+        if (stat(vbuff, &statbuf) != -1)
         {
             if ((ByteSizeList(out[i]) < statbuf.st_size) && (now < statbuf.st_mtime + 40 * 60))
             {
-                CfOut(cf_verbose, "", "New state %s is smaller, retaining old for 40 mins longer\n", ECGSOCKS[i].name);
+                Log(LOG_LEVEL_VERBOSE, "New state '%s' is smaller, retaining old for 40 mins longer", ECGSOCKS[i].name);
                 DeleteItemList(out[i]);
                 continue;
             }
@@ -372,7 +414,7 @@ void MonNetworkGatherData(double *cf_this)
 
         SetNetworkEntropyClasses(CanonifyName(ECGSOCKS[i].name), "out", out[i]);
         RawSaveItemList(out[i], vbuff);
-        CfDebug("Saved out netstat data in %s\n", vbuff);
+        Log(LOG_LEVEL_DEBUG, "Saved out netstat data in '%s'", vbuff);
         DeleteItemList(out[i]);
     }
 }

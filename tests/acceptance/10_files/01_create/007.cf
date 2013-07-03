@@ -9,8 +9,6 @@ body common control
   inputs => { "../../default.cf.sub" };
   bundlesequence  => { default("$(this.promise_filename)") };
   version => "1.0";
-nova_edition::
-  host_licenses_paid => "5";
 }
 
 bundle common g
@@ -45,21 +43,14 @@ vars:
 files:
         "$(G.testfile)"
             create => "true",
-            perms => test_perms;
+            perms => test_perms($(mode));
 }
 
-body perms test_perms
+body perms test_perms(m)
 {
-mode => "$(test.mode)";
-linux::
-    owners => { "root", "sys" };
-    groups => { "root", "sys" };
-freebsd::
-    owners => { "root", "bin" };
-    groups => { "wheel", "sys" };
-!(linux|freebsd)::
-    owners => { "undefined-please-fix" };
-    groups => { "undefined-please-fix" };
+        mode => "$(m)";
+        owners => { "0" };
+        groups => { "0" };
 }
 
 #######################################################
@@ -70,7 +61,7 @@ vars:
         "expect" string => "$(test.mode) 1 0 0 0";
 
         "result" string => execresult(
-            "/usr/bin/perl -le '$(g.command)'",
+            "$(G.perl) -le '$(g.command)'",
             "noshell");
 
 classes:

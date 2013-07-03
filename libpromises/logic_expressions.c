@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -27,7 +27,6 @@
 #include "cf3.defs.h"
 #include "bool.h"
 #include "logic_expressions.h"
-#include "logging.h"
 #include "misc_lib.h"
 
 #include <stdlib.h>
@@ -42,20 +41,16 @@ static ParseResult ParsePrimary(const char *expr, int start, int end)
 
         if (res.result)
         {
-            /* Check there is a matching ')' at the end */
+            /* Check if there is a matching ')' at the end */
             if (res.position < end && expr[res.position] == ')')
             {
-                return (ParseResult)
-                {
-                res.result, res.position + 1};
+                return (ParseResult) {res.result, res.position + 1};
             }
             else
             {
-                /* Didn't find a matching bracket. Give up */
+                /* Haven't found a matching bracket. Give up */
                 FreeExpression(res.result);
-                return (ParseResult)
-                {
-                NULL, res.position};
+                return (ParseResult) {NULL, res.position};
             }
         }
         else
@@ -74,15 +69,11 @@ static ParseResult ParsePrimary(const char *expr, int start, int end)
             res->op = EVAL;
             res->val.eval.name = strres.result;
 
-            return (ParseResult)
-            {
-            res, strres.position};
+            return (ParseResult) {res, strres.position};
         }
         else
         {
-            return (ParseResult)
-            {
-            NULL, strres.position};
+            return (ParseResult) {NULL, strres.position};
         }
     }
 }
@@ -102,9 +93,7 @@ static ParseResult ParseNotExpression(const char *expr, int start, int end)
             res->op = NOT;
             res->val.not.arg = primres.result;
 
-            return (ParseResult)
-            {
-            res, primres.position};
+            return (ParseResult) {res, primres.position};
         }
         else
         {
@@ -149,9 +138,7 @@ static ParseResult ParseAndExpression(const char *expr, int start, int end)
     res->val.andor.lhs = lhs.result;
     res->val.andor.rhs = rhs.result;
 
-    return (ParseResult)
-    {
-    res, rhs.position};
+    return (ParseResult) {res, rhs.position};
 }
 
 /* <or-expr> */
@@ -197,9 +184,7 @@ ParseResult ParseExpression(const char *expr, int start, int end)
     res->val.andor.lhs = lhs.result;
     res->val.andor.rhs = rhs.result;
 
-    return (ParseResult)
-    {
-    res, rhs.position};
+    return (ParseResult) {res, rhs.position};
 }
 
 /* Evaluation */

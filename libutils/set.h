@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -33,12 +33,13 @@ typedef MapIterator SetIterator;
 Set *SetNew(MapHashFn element_hash_fn,
             MapKeyEqualFn element_equal_fn,
             MapDestroyDataFn element_destroy_fn);
-void SetDestroy(void *set);
+void SetDestroy(Set *set);
 
 void SetAdd(Set *set, void *element);
 bool SetContains(const Set *set, const void *element);
 bool SetRemove(Set *set, const void *element);
 void SetClear(Set *set);
+size_t SetSize(const Set *set);
 
 void SetUnion(Set *set, const Set *other);
 
@@ -51,12 +52,17 @@ void *SetIteratorNext(SetIterator *i);
         Set *impl;                                                      \
     } Prefix##Set;                                                      \
                                                                         \
+    typedef SetIterator Prefix##SetIterator;                            \
+                                                                        \
     Prefix##Set *Prefix##SetNew(void);                                  \
     void Prefix##SetAdd(const Prefix##Set *set, ElementType element);   \
     bool Prefix##SetContains(const Prefix##Set *Set, const ElementType element);  \
     bool Prefix##SetRemove(const Prefix##Set *Set, const ElementType element);  \
     void Prefix##SetClear(Prefix##Set *set);                            \
+    size_t Prefix##SetSize(const Prefix##Set *set);                     \
     void Prefix##SetDestroy(Prefix##Set *set);                          \
+    Prefix##SetIterator Prefix##SetIteratorInit(Prefix##Set *set);      \
+    ElementType Prefix##SetIteratorNext(Prefix##SetIterator *iter);     \
 
 #define TYPED_SET_DEFINE(Prefix, ElementType, hash_fn, equal_fn, destroy_fn) \
                                                                         \
@@ -67,9 +73,9 @@ void *SetIteratorNext(SetIterator *i);
         return set;                                                     \
     }                                                                   \
                                                                         \
-    void Prefix##SetInsert(const Prefix##Set *set, ElementType element) \
+    void Prefix##SetAdd(const Prefix##Set *set, ElementType element)    \
     {                                                                   \
-        SetAdd(set->impl, element);                                     \
+        SetAdd(set->impl, (void *)element);                             \
     }                                                                   \
                                                                         \
     bool Prefix##SetContains(const Prefix##Set *set, const ElementType element)   \
@@ -87,10 +93,33 @@ void *SetIteratorNext(SetIterator *i);
         return SetClear(set->impl);                                     \
     }                                                                   \
                                                                         \
+    size_t Prefix##SetSize(const Prefix##Set *set)                      \
+    {                                                                   \
+        return SetSize(set->impl);                                      \
+    }                                                                   \
+                                                                        \
     void Prefix##SetDestroy(Prefix##Set *set)                           \
     {                                                                   \
-        SetDestroy(set->impl);                                          \
-        free(set);                                                      \
-    }
+        if (set)                                                        \
+        {                                                               \
+            SetDestroy(set->impl);                                      \
+            free(set);                                                  \
+        }                                                               \
+    }                                                                   \
+                                                                        \
+    Prefix##SetIterator Prefix##SetIteratorInit(Prefix##Set *set)       \
+    {                                                                   \
+        return SetIteratorInit(set->impl);                              \
+    }                                                                   \
+                                                                        \
+    ElementType Prefix##SetIteratorNext(Prefix##SetIterator *iter)      \
+    {                                                                   \
+        return SetIteratorNext(iter);                                   \
+    }                                                                   \
+
+
+TYPED_SET_DECLARE(String, char *)
+
+StringSet *StringSetFromString(const char *str, char delimiter);
 
 #endif

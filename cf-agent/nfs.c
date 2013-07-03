@@ -1,26 +1,25 @@
-/* 
-   Copyright (C) Cfengine AS
+/*
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
    Free Software Foundation; version 3.
-   
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
-  You should have received a copy of the GNU General Public License  
+
+  You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
 #include "cf3.defs.h"
@@ -32,27 +31,24 @@
 #include "item_lib.h"
 #include "conversion.h"
 #include "matching.h"
-#include "cfstream.h"
 #include "string_lib.h"
 #include "pipes.h"
-#include "logging.h"
 #include "nfs.h"
 #include "misc_lib.h"
 #include "rlist.h"
+#include "env_context.h"
 
 /* seconds */
 #define RPCTIMEOUT 60
 
-int FSTAB_EDITS;
-Item *FSTABLIST = NULL;
-
-#ifndef __MINGW32__
+static int FSTAB_EDITS;
+static Item *FSTABLIST = NULL;
 
 static void AugmentMountInfo(Rlist **list, char *host, char *source, char *mounton, char *options);
 static int MatchFSInFstab(char *match);
 static void DeleteThisItem(Item **liststart, Item *entry);
 
-static const char *VMOUNTCOMM[HARD_CLASSES_MAX] =
+static const char *VMOUNTCOMM[PLATFORM_CONTEXT_MAX] =
 {
     "",
     "/sbin/mount -ea",          /* hpux */
@@ -73,7 +69,7 @@ static const char *VMOUNTCOMM[HARD_CLASSES_MAX] =
     "/bin/mount -a",            /* vmware */
 };
 
-static const char *VUNMOUNTCOMM[HARD_CLASSES_MAX] =
+static const char *VUNMOUNTCOMM[PLATFORM_CONTEXT_MAX] =
 {
     "",
     "/sbin/umount",             /* hpux */
@@ -94,7 +90,7 @@ static const char *VUNMOUNTCOMM[HARD_CLASSES_MAX] =
     "/bin/umount",              /* vmware */
 };
 
-static const char *VMOUNTOPTS[HARD_CLASSES_MAX] =
+static const char *VMOUNTOPTS[PLATFORM_CONTEXT_MAX] =
 {
     "",
     "bg,hard,intr",             /* hpux */
@@ -115,7 +111,7 @@ static const char *VMOUNTOPTS[HARD_CLASSES_MAX] =
     "defaults",                 /* vmstate */
 };
 
-int LoadMountInfo(Rlist **list)
+bool LoadMountInfo(Rlist **list)
 /* This is, in fact, the most portable way to read the mount info! */
 /* Depressing, isn't it? */
 {
@@ -133,30 +129,28 @@ int LoadMountInfo(Rlist **list)
 
     SetTimeOut(RPCTIMEOUT);
 
-    if ((pp = cf_popen(buf1, "r")) == NULL)
+    if ((pp = cf_popen(buf1, "r", true)) == NULL)
     {
-        CfOut(cf_error, "cf_popen", "Can't open %s\n", buf1);
+        Log(LOG_LEVEL_ERR, "Can't open '%s'. (cf_popen: %s)", buf1, GetErrorStr());
         return false;
     }
 
-    do
+    for (;;)
     {
         vbuff[0] = buf1[0] = buf2[0] = buf3[0] = source[0] = '\0';
+        nfs = false;
 
-        if (ferror(pp))         /* abortable */
+        ssize_t res = CfReadLine(vbuff, CF_BUFSIZE, pp);
+
+        if (res == -1)
         {
-            CfOut(cf_error, "ferror", "Error getting mount info\n");
-            break;
+            Log(LOG_LEVEL_ERR, "Unable to read list of mounted filesystems. (fread: %s)", GetErrorStr());
+            cf_pclose(pp);
+            return false;
         }
 
-        if (CfReadLine(vbuff, CF_BUFSIZE, pp) == -1)
+        if (res == 0)
         {
-            FatalError("Error in CfReadLine");
-        }
-
-        if (ferror(pp))         /* abortable */
-        {
-            CfOut(cf_error, "ferror", "Error getting mount info\n");
             break;
         }
 
@@ -174,13 +168,12 @@ int LoadMountInfo(Rlist **list)
 
         if (strstr(vbuff, "not responding"))
         {
-            CfOut(cf_error, "", "%s\n", vbuff);
+            Log(LOG_LEVEL_ERR, "%s", vbuff);
         }
 
         if (strstr(vbuff, "be root"))
         {
-            CfOut(cf_error, "", "Mount access is denied. You must be root.\n");
-            CfOut(cf_error, "", "Use the -n option to run safely.");
+            Log(LOG_LEVEL_ERR, "Mount access is denied. You must be root. Use the -n option to run safely");
         }
 
         if ((strstr(vbuff, "retrying")) || (strstr(vbuff, "denied")) || (strstr(vbuff, "backgrounding")))
@@ -195,9 +188,9 @@ int LoadMountInfo(Rlist **list)
 
         if (strstr(vbuff, "RPC"))
         {
-            CfOut(cf_inform, "", "There was an RPC timeout. Aborting mount operations.\n");
-            CfOut(cf_inform, "", "Session failed while trying to talk to remote host\n");
-            CfOut(cf_inform, "", "%s\n", vbuff);
+            Log(LOG_LEVEL_INFO, "There was an RPC timeout. Aborting mount operations.");
+            Log(LOG_LEVEL_INFO, "Session failed while trying to talk to remote host");
+            Log(LOG_LEVEL_INFO, "%s", vbuff);
             cf_pclose(pp);
             return false;
         }
@@ -231,7 +224,7 @@ int LoadMountInfo(Rlist **list)
         strcpy(mounton, buf2);
         strcpy(host, buf1);
 #elif defined(sco) || defined(__SCO_DS)
-        CfOut(cf_error, "", "Don't understand SCO mount format, no data");
+        Log(LOG_LEVEL_ERR, "Don't understand SCO mount format, no data");
 #else
         if (IsAbsoluteFileName(buf1))
         {
@@ -245,7 +238,7 @@ int LoadMountInfo(Rlist **list)
         }
 #endif
 
-        CfDebug("GOT: host=%s, source=%s, mounton=%s\n", host, source, mounton);
+        Log(LOG_LEVEL_DEBUG, "LoadMountInfo: host '%s', source '%s', mounton '%s'", host, source, mounton);
 
         if (nfs)
         {
@@ -256,7 +249,6 @@ int LoadMountInfo(Rlist **list)
             AugmentMountInfo(list, host, source, mounton, NULL);
         }
     }
-    while (!feof(pp));
 
     alarm(0);
     signal(SIGALRM, SIG_DFL);
@@ -331,7 +323,7 @@ void DeleteMountInfo(Rlist *list)
 
 /*******************************************************************/
 
-int VerifyInFstab(char *name, Attributes a, Promise *pp)
+int VerifyInFstab(EvalContext *ctx, char *name, Attributes a, Promise *pp)
 /* Ensure filesystem IS in fstab, and return no of changes */
 {
     char fstab[CF_BUFSIZE];
@@ -339,9 +331,9 @@ int VerifyInFstab(char *name, Attributes a, Promise *pp)
 
     if (!FSTABLIST)
     {
-        if (!LoadFileAsItemList(&FSTABLIST, VFSTAB[VSYSTEMHARDCLASS], a, pp))
+        if (!LoadFileAsItemList(&FSTABLIST, VFSTAB[VSYSTEMHARDCLASS], a.edits))
         {
-            CfOut(cf_error, "", "Couldn't open %s!\n", VFSTAB[VSYSTEMHARDCLASS]);
+            Log(LOG_LEVEL_ERR, "Couldn't open '%s'", VFSTAB[VSYSTEMHARDCLASS]);
             return false;
         }
         else
@@ -389,13 +381,13 @@ int VerifyInFstab(char *name, Attributes a, Promise *pp)
     snprintf(fstab, CF_BUFSIZE, "/bin/mount %s:%s %s", host, rmountpt, mountpt);
 #endif
 
-    CfOut(cf_verbose, "", "Verifying %s in %s\n", mountpt, VFSTAB[VSYSTEMHARDCLASS]);
+    Log(LOG_LEVEL_VERBOSE, "Verifying '%s' in '%s'", mountpt, VFSTAB[VSYSTEMHARDCLASS]);
 
     if (!MatchFSInFstab(mountpt))
     {
         AppendItem(&FSTABLIST, fstab, NULL);
         FSTAB_EDITS++;
-        cfPS(cf_inform, CF_CHG, "", pp, a, "Adding file system %s:%s seems to %s.\n", host, rmountpt,
+        cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Adding file system '%s:%s' to '%s'", host, rmountpt,
              VFSTAB[VSYSTEMHARDCLASS]);
     }
 
@@ -405,7 +397,7 @@ int VerifyInFstab(char *name, Attributes a, Promise *pp)
 
 /*******************************************************************/
 
-int VerifyNotInFstab(char *name, Attributes a, Promise *pp)
+int VerifyNotInFstab(EvalContext *ctx, char *name, Attributes a, Promise *pp)
 /* Ensure filesystem is NOT in fstab, and return no of changes */
 {
     char regex[CF_BUFSIZE];
@@ -414,9 +406,9 @@ int VerifyNotInFstab(char *name, Attributes a, Promise *pp)
 
     if (!FSTABLIST)
     {
-        if (!LoadFileAsItemList(&FSTABLIST, VFSTAB[VSYSTEMHARDCLASS], a, pp))
+        if (!LoadFileAsItemList(&FSTABLIST, VFSTAB[VSYSTEMHARDCLASS], a.edits))
         {
-            CfOut(cf_error, "", "Couldn't open %s!\n", VFSTAB[VSYSTEMHARDCLASS]);
+            Log(LOG_LEVEL_ERR, "Couldn't open '%s'", VFSTAB[VSYSTEMHARDCLASS]);
             return false;
         }
         else
@@ -447,17 +439,26 @@ int VerifyNotInFstab(char *name, Attributes a, Promise *pp)
 
             snprintf(aixcomm, CF_BUFSIZE, "/usr/sbin/rmnfsmnt -f %s", mountpt);
 
-            if ((pfp = cf_popen(aixcomm, "r")) == NULL)
+            if ((pfp = cf_popen(aixcomm, "r", true)) == NULL)
             {
-                cfPS(cf_error, CF_FAIL, "", pp, a, "Failed to invoke /usr/sbin/rmnfsmnt to edit fstab");
+                cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, "Failed to invoke /usr/sbin/rmnfsmnt to edit fstab");
                 return 0;
             }
 
-            while (!feof(pfp))
+            for (;;)
             {
-                if (CfReadLine(line, CF_BUFSIZE, pfp) == -1)
+                ssize_t res = CfReadLine(line, CF_BUFSIZE, pfp);
+
+                if (res == -1)
                 {
-                    FatalError("Error in CfReadLine");
+                    cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, "Unable to read output of /bin/rmnfsmnt");
+                    cf_pclose(pfp);
+                    return 0;
+                }
+
+                if (res == 0)
+                {
+                    break;
                 }
 
                 if (line[0] == '#')
@@ -467,7 +468,7 @@ int VerifyNotInFstab(char *name, Attributes a, Promise *pp)
 
                 if (strstr(line, "busy"))
                 {
-                    cfPS(cf_inform, CF_INTERPT, "", pp, a, "The device under %s cannot be removed from %s\n",
+                    cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_INTERRUPTED, pp, a, "The device under '%s' cannot be removed from '%s'",
                          mountpt, VFSTAB[VSYSTEMHARDCLASS]);
                     return 0;
                 }
@@ -483,7 +484,7 @@ int VerifyNotInFstab(char *name, Attributes a, Promise *pp)
             {
                 if (FullTextMatch(regex, ip->name))
                 {
-                    cfPS(cf_inform, CF_CHG, "", pp, a, "Deleting file system mounted on %s.\n", host);
+                    cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Deleting file system mounted on '%s'", host);
                     // Check host name matches too?
                     DeleteThisItem(&FSTABLIST, ip);
                     FSTAB_EDITS++;
@@ -503,7 +504,7 @@ int VerifyNotInFstab(char *name, Attributes a, Promise *pp)
 
 /*******************************************************************/
 
-int VerifyMount(char *name, Attributes a, Promise *pp)
+int VerifyMount(EvalContext *ctx, char *name, Attributes a, Promise *pp)
 {
     char comm[CF_BUFSIZE], line[CF_BUFSIZE];
     FILE *pfp;
@@ -525,22 +526,26 @@ int VerifyMount(char *name, Attributes a, Promise *pp)
 
     if (!DONTDO)
     {
-        snprintf(comm, CF_BUFSIZE, "%s -o %s %s:%s %s", GetArg0(VMOUNTCOMM[VSYSTEMHARDCLASS]), opts, host, rmountpt, mountpt);
+        snprintf(comm, CF_BUFSIZE, "%s -o %s %s:%s %s", CommandArg0(VMOUNTCOMM[VSYSTEMHARDCLASS]), opts, host, rmountpt, mountpt);
 
-        if ((pfp = cf_popen(comm, "r")) == NULL)
+        if ((pfp = cf_popen(comm, "r", true)) == NULL)
         {
-            CfOut(cf_error, "", " !! Failed to open pipe from %s\n", GetArg0(VMOUNTCOMM[VSYSTEMHARDCLASS]));
+            Log(LOG_LEVEL_ERR, "Failed to open pipe from '%s'", CommandArg0(VMOUNTCOMM[VSYSTEMHARDCLASS]));
             return 0;
         }
 
-        if (CfReadLine(line, CF_BUFSIZE, pfp) == -1)
+        ssize_t res = CfReadLine(line, CF_BUFSIZE, pfp);
+
+        if (res == -1)
         {
-            FatalError("Error in CfReadLine");
+            Log(LOG_LEVEL_ERR, "Unable to read output of mount command. (fread: %s)", GetErrorStr());
+            cf_pclose(pfp);
+            return 0;
         }
 
-        if ((strstr(line, "busy")) || (strstr(line, "Busy")))
+        if (res != 0 && ((strstr(line, "busy")) || (strstr(line, "Busy"))))
         {
-            cfPS(cf_inform, CF_INTERPT, "", pp, a, " !! The device under %s cannot be mounted\n", mountpt);
+            cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_INTERRUPTED, pp, a, "The device under '%s' cannot be mounted", mountpt);
             cf_pclose(pfp);
             return 1;
         }
@@ -551,13 +556,13 @@ int VerifyMount(char *name, Attributes a, Promise *pp)
     /* Since opts is either Rlist2String or xstrdup'd, we need to always free it */
     free(opts);
 
-    cfPS(cf_inform, CF_CHG, "", pp, a, " -> Mounting %s to keep promise\n", mountpt);
+    cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Mounting '%s' to keep promise", mountpt);
     return 0;
 }
 
 /*******************************************************************/
 
-int VerifyUnmount(char *name, Attributes a, Promise *pp)
+int VerifyUnmount(EvalContext *ctx, char *name, Attributes a, Promise *pp)
 {
     char comm[CF_BUFSIZE], line[CF_BUFSIZE];
     FILE *pfp;
@@ -569,20 +574,24 @@ int VerifyUnmount(char *name, Attributes a, Promise *pp)
     {
         snprintf(comm, CF_BUFSIZE, "%s %s", VUNMOUNTCOMM[VSYSTEMHARDCLASS], mountpt);
 
-        if ((pfp = cf_popen(comm, "r")) == NULL)
+        if ((pfp = cf_popen(comm, "r", true)) == NULL)
         {
-            CfOut(cf_error, "", " !! Failed to open pipe from %s\n", VUNMOUNTCOMM[VSYSTEMHARDCLASS]);
+            Log(LOG_LEVEL_ERR, "Failed to open pipe from %s", VUNMOUNTCOMM[VSYSTEMHARDCLASS]);
             return 0;
         }
 
-        if (CfReadLine(line, CF_BUFSIZE, pfp) == -1)
+        ssize_t res = CfReadLine(line, CF_BUFSIZE, pfp);
+
+        if (res == -1)
         {
-            FatalError("Error in CfReadLine");
+            Log(LOG_LEVEL_ERR, "Unable to read output of unmount command. (fread: %s)", GetErrorStr());
+            cf_pclose(pfp);
+            return 0;
         }
 
-        if ((strstr(line, "busy")) || (strstr(line, "Busy")))
+        if (res != 0 && ((strstr(line, "busy")) || (strstr(line, "Busy"))))
         {
-            cfPS(cf_inform, CF_INTERPT, "", pp, a, " !! The device under %s cannot be unmounted\n", mountpt);
+            cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_INTERRUPTED, pp, a, "The device under '%s' cannot be unmounted", mountpt);
             cf_pclose(pfp);
             return 1;
         }
@@ -590,7 +599,7 @@ int VerifyUnmount(char *name, Attributes a, Promise *pp)
         cf_pclose(pfp);
     }
 
-    cfPS(cf_inform, CF_CHG, "", pp, a, " -> Unmounting %s to keep promise\n", mountpt);
+    cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Unmounting '%s' to keep promise", mountpt);
     return 0;
 }
 
@@ -620,12 +629,12 @@ void MountAll()
 
     if (DONTDO)
     {
-        CfOut(cf_verbose, "", "Promised to mount filesystem, but not on this trial run\n");
+        Log(LOG_LEVEL_VERBOSE, "Promised to mount filesystem, but not on this trial run");
         return;
     }
     else
     {
-        CfOut(cf_verbose, "", " -> Attempting to mount all filesystems.\n");
+        Log(LOG_LEVEL_VERBOSE, "Attempting to mount all filesystems.");
     }
 
 #if defined(__CYGWIN__)
@@ -633,7 +642,7 @@ void MountAll()
 
     struct stat sb;
 
-    if (cfstat("/etc/fstab", &sb) == -1)
+    if (stat("/etc/fstab", &sb) == -1)
     {
         int fd;
         if ((fd = creat("/etc/fstab", 0755)) > 0)
@@ -648,7 +657,7 @@ void MountAll()
         {
             if (sb.st_mode & (S_IWOTH | S_IWGRP))
             {
-                CfOut(cf_error, "", "File /etc/fstab was insecure. Cannot mount filesystems.\n");
+                Log(LOG_LEVEL_ERR, "File /etc/fstab was insecure. Cannot mount filesystems.");
                 return;
             }
         }
@@ -657,28 +666,25 @@ void MountAll()
 
     SetTimeOut(RPCTIMEOUT);
 
-    if ((pp = cf_popen(VMOUNTCOMM[VSYSTEMHARDCLASS], "r")) == NULL)
+    if ((pp = cf_popen(VMOUNTCOMM[VSYSTEMHARDCLASS], "r", true)) == NULL)
     {
-        CfOut(cf_error, "cf_popen", "Failed to open pipe from %s\n", VMOUNTCOMM[VSYSTEMHARDCLASS]);
+        Log(LOG_LEVEL_ERR, "Failed to open pipe from '%s'. (cf_popen: %s)",
+            VMOUNTCOMM[VSYSTEMHARDCLASS], GetErrorStr());
         return;
     }
 
-    while (!feof(pp))
+    for (;;)
     {
-        if (ferror(pp))         /* abortable */
+        ssize_t res = CfReadLine(line, CF_BUFSIZE, pp);
+
+        if (res == 0)
         {
-            CfOut(cf_inform, "ferror", "Error mounting filesystems\n");
             break;
         }
 
-        if (CfReadLine(line, CF_BUFSIZE, pp) == -1)
+        if (res == -1)
         {
-            FatalError("Error in CfReadLine");
-        }
-
-        if (ferror(pp))         /* abortable */
-        {
-            CfOut(cf_inform, "ferror", "Error mounting filesystems\n");
+            Log(LOG_LEVEL_ERR, "Error reading list of mounted filesystems. (ferror: %s)", GetErrorStr());
             break;
         }
 
@@ -694,13 +700,13 @@ void MountAll()
 
         if ((strstr(line, "denied")) || (strstr(line, "RPC")))
         {
-            CfOut(cf_error, "", "There was a mount error, trying to mount one of the filesystems on this host.\n");
+            Log(LOG_LEVEL_ERR, "There was a mount error, trying to mount one of the filesystems on this host.");
             break;
         }
 
         if ((strstr(line, "trying")) && (!strstr(line, "NFS version 2")) && (!strstr(line, "vers 3")))
         {
-            CfOut(cf_error, "", "Attempting abort because mount went into a retry loop.\n");
+            Log(LOG_LEVEL_ERR, "Attempting abort because mount went into a retry loop.");
             break;
         }
     }
@@ -744,4 +750,19 @@ static void DeleteThisItem(Item **liststart, Item *entry)
     }
 }
 
-#endif /* !__MINGW32__ */
+void CleanupNFS(void)
+{
+    Attributes a = { {0} };
+    Log(LOG_LEVEL_VERBOSE, "Number of changes observed in '%s' is %d", VFSTAB[VSYSTEMHARDCLASS], FSTAB_EDITS);
+
+    if (FSTAB_EDITS && FSTABLIST && !DONTDO)
+    {
+        if (FSTABLIST)
+        {
+            SaveItemListAsFile(FSTABLIST, VFSTAB[VSYSTEMHARDCLASS], a);
+            DeleteItemList(FSTABLIST);
+            FSTABLIST = NULL;
+        }
+        FSTAB_EDITS = 0;
+    }
+}

@@ -1,26 +1,25 @@
-/* 
-   Copyright (C) Cfengine AS
+/*
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
    Free Software Foundation; version 3.
-   
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
-  You should have received a copy of the GNU General Public License  
+
+  You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
 #include "verify_exec.h"
@@ -32,76 +31,80 @@
 #include "conversion.h"
 #include "instrumentation.h"
 #include "attributes.h"
-#include "cfstream.h"
 #include "pipes.h"
-#include "transaction.h"
-#include "logging.h"
+#include "locks.h"
 #include "evalfunction.h"
 #include "exec_tools.h"
 #include "misc_lib.h"
 #include "writer.h"
+#include "policy.h"
+#include "string_lib.h"
+#include "scope.h"
+#include "ornaments.h"
+#include "env_context.h"
+#include "retcode.h"
 
 typedef enum
 {
     ACTION_RESULT_OK,
     ACTION_RESULT_TIMEOUT,
-    ACTION_RESULT_FAILED,
+    ACTION_RESULT_FAILED
 } ActionResult;
 
 static bool SyntaxCheckExec(Attributes a, Promise *pp);
 static bool PromiseKeptExec(Attributes a, Promise *pp);
 static char *GetLockNameExec(Attributes a, Promise *pp);
-static ActionResult RepairExec(Attributes a, Promise *pp);
+static ActionResult RepairExec(EvalContext *ctx, Attributes a, Promise *pp);
 
 static void PreviewProtocolLine(char *line, char *comm);
 
-void VerifyExecPromise(Promise *pp)
+void VerifyExecPromise(EvalContext *ctx, Promise *pp)
 {
     Attributes a = { {0} };
 
-    a = GetExecAttributes(pp);
+    a = GetExecAttributes(ctx, pp);
 
-    NewScalar("this", "promiser", pp->promiser, DATA_TYPE_STRING);
+    ScopeNewSpecial(ctx, "this", "promiser", pp->promiser, DATA_TYPE_STRING);
 
     if (!SyntaxCheckExec(a, pp))
     {
-        // cfPS(cf_error, CF_FAIL, "", pp, a, "");
-        DeleteScalar("this", "promiser");
+        // cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, "");
+        ScopeDeleteSpecial("this", "promiser");
         return;
     }
 
     if (PromiseKeptExec(a, pp))
     {
-        // cfPS(cf_inform, CF_NOP, "", pp, a, "");
-        DeleteScalar("this", "promiser");
+        // cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_NOOP, pp, a, "");
+        ScopeDeleteSpecial("this", "promiser");
         return;
     }
 
     char *lock_name = GetLockNameExec(a, pp);
-    CfLock thislock = AcquireLock(lock_name, VUQNAME, CFSTARTTIME, a, pp, false);
+    CfLock thislock = AcquireLock(ctx, lock_name, VUQNAME, CFSTARTTIME, a.transaction, pp, false);
     free(lock_name);
 
     if (thislock.lock == NULL)
     {
-        // cfPS(cf_inform, CF_FAIL, "", pp, a, "");
-        DeleteScalar("this", "promiser");
+        // cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_FAIL, pp, a, "");
+        ScopeDeleteSpecial("this", "promiser");
         return;
     }
 
     PromiseBanner(pp);
 
-    switch (RepairExec(a, pp))
+    switch (RepairExec(ctx, a, pp))
     {
     case ACTION_RESULT_OK:
-        // cfPS(cf_inform, CF_CHG, "", pp, a, "");
+        // cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "");
         break;
 
     case ACTION_RESULT_TIMEOUT:
-        // cfPS(cf_error, CF_TIMEX, "", pp, a, "");
+        // cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_TIMEOUT, pp, a, "");
         break;
 
     case ACTION_RESULT_FAILED:
-        // cfPS(cf_inform, CF_FAIL, "", pp, a, "");
+        // cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_FAIL, pp, a, "");
         break;
 
     default:
@@ -109,7 +112,7 @@ void VerifyExecPromise(Promise *pp)
     }
 
     YieldCurrentLock(thislock);
-    DeleteScalar("this", "promiser");
+    ScopeDeleteSpecial("this", "promiser");
 }
 
 /*****************************************************************************/
@@ -120,30 +123,30 @@ static bool SyntaxCheckExec(Attributes a, Promise *pp)
 {
     if ((a.contain.nooutput) && (a.contain.preview))
     {
-        CfOut(cf_error, "", "no_output and preview are mutually exclusive (broken promise)");
-        PromiseRef(cf_error, pp);
+        Log(LOG_LEVEL_ERR, "no_output and preview are mutually exclusive (broken promise)");
+        PromiseRef(LOG_LEVEL_ERR, pp);
         return false;
     }
 
 #ifdef __MINGW32__
     if (a.contain.umask != (mode_t)CF_UNDEFINED)
     {
-        CfOut(cf_verbose, "", "contain.umask is ignored on Windows");
+        Log(LOG_LEVEL_VERBOSE, "contain.umask is ignored on Windows");
     }
 
     if (a.contain.owner != CF_UNDEFINED)
     {
-        CfOut(cf_verbose, "", "contain.exec_owner is ignored on Windows");
+        Log(LOG_LEVEL_VERBOSE, "contain.exec_owner is ignored on Windows");
     }
 
     if (a.contain.group != CF_UNDEFINED)
     {
-        CfOut(cf_verbose, "", "contain.exec_group is ignored on Windows");
+        Log(LOG_LEVEL_VERBOSE, "contain.exec_group is ignored on Windows");
     }
 
     if (a.contain.chroot != NULL)
     {
-        CfOut(cf_verbose, "", "contain.chroot is ignored on Windows");
+        Log(LOG_LEVEL_VERBOSE, "contain.chroot is ignored on Windows");
     }
 
 #else /* !__MINGW32__ */
@@ -156,7 +159,7 @@ static bool SyntaxCheckExec(Attributes a, Promise *pp)
     return true;
 }
 
-static bool PromiseKeptExec(Attributes a, Promise *pp)
+static bool PromiseKeptExec(ARG_UNUSED Attributes a, ARG_UNUSED Promise *pp)
 {
     return false;
 }
@@ -178,7 +181,7 @@ static char *GetLockNameExec(Attributes a, Promise *pp)
 
 /*****************************************************************************/
 
-static ActionResult RepairExec(Attributes a, Promise *pp)
+static ActionResult RepairExec(EvalContext *ctx, Attributes a, Promise *pp)
 {
     char line[CF_BUFSIZE], eventname[CF_BUFSIZE];
     char cmdline[CF_BUFSIZE];
@@ -192,20 +195,23 @@ static ActionResult RepairExec(Attributes a, Promise *pp)
     int cmdOutBufPos = 0;
     int lineOutLen;
 
-    if (!IsExecutable(GetArg0(pp->promiser)))
+    if (IsAbsoluteFileName(CommandArg0(pp->promiser)) || a.contain.shelltype == SHELL_TYPE_NONE)
     {
-        CfOut(cf_error, "", "%s promises to be executable but isn't\n", pp->promiser);
-
-        if (strchr(pp->promiser, ' '))
+        if (!IsExecutable(CommandArg0(pp->promiser)))
         {
-            CfOut(cf_verbose, "", "Paths with spaces must be inside escaped quoutes (e.g. \\\"%s\\\")", pp->promiser);
-        }
+            cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, "'%s' promises to be executable but isn't", pp->promiser);
 
-        return ACTION_RESULT_FAILED;
-    }
-    else
-    {
-        CfOut(cf_verbose, "", " -> Promiser string contains a valid executable (%s) - ok\n", GetArg0(pp->promiser));
+            if (strchr(pp->promiser, ' '))
+            {
+                Log(LOG_LEVEL_VERBOSE, "Paths with spaces must be inside escaped quoutes (e.g. \\\"%s\\\")", pp->promiser);
+            }
+
+            return ACTION_RESULT_FAILED;
+        }
+        else
+        {
+            Log(LOG_LEVEL_VERBOSE, "Promiser string contains a valid executable '%s' - ok", CommandArg0(pp->promiser));
+        }
     }
 
     char timeout_str[CF_BUFSIZE];
@@ -232,178 +238,190 @@ static ActionResult RepairExec(Attributes a, Promise *pp)
 
     snprintf(cmdline, CF_BUFSIZE, "%s%s%s", pp->promiser, a.args ? " " : "", a.args ? a.args : "");
 
-    CfOut(cf_inform, "", " -> Executing \'%s%s%s\' ... (%s)\n", timeout_str, owner_str, group_str, cmdline);
+    Log(LOG_LEVEL_INFO, "Executing '%s%s%s' ... '%s'", timeout_str, owner_str, group_str, cmdline);
 
     BeginMeasure();
 
     if (DONTDO && (!a.contain.preview))
     {
-        CfOut(cf_error, "", "-> Would execute script %s\n", cmdline);
+        Log(LOG_LEVEL_ERR, "Would execute script '%s'", cmdline);
         return ACTION_RESULT_OK;
     }
-    else if (a.transaction.action != cfa_fix)
+
+    if (a.transaction.action != cfa_fix)
     {
-        CfOut(cf_error, "", " !! Command \"%s\" needs to be executed, but only warning was promised", cmdline);
+        Log(LOG_LEVEL_ERR, "Command '%s' needs to be executed, but only warning was promised", cmdline);
         return ACTION_RESULT_OK;
+    }
+
+    CommandPrefix(cmdline, comm);
+
+    if (a.transaction.background)
+    {
+#ifdef __MINGW32__
+        outsourced = true;
+#else
+        Log(LOG_LEVEL_VERBOSE, "Backgrounding job '%s'", cmdline);
+        outsourced = fork();
+#endif
     }
     else
     {
-        CommPrefix(cmdline, comm);
+        outsourced = false;
+    }
 
-        if (a.transaction.background)
+    if (outsourced || (!a.transaction.background))    // work done here: either by child or non-background parent
+    {
+        if (a.contain.timeout != CF_NOINT)
+        {
+            SetTimeOut(a.contain.timeout);
+        }
+
+#ifndef __MINGW32__
+        Log(LOG_LEVEL_VERBOSE, "(Setting umask to %jo)", (uintmax_t)a.contain.umask);
+        maskval = umask(a.contain.umask);
+
+        if (a.contain.umask == 0)
+        {
+            Log(LOG_LEVEL_VERBOSE, "Programming '%s' running with umask 0! Use umask= to set", cmdline);
+        }
+#endif /* !__MINGW32__ */
+
+        if (a.contain.shelltype == SHELL_TYPE_POWERSHELL)
         {
 #ifdef __MINGW32__
-            outsourced = true;
-#else
-            CfOut(cf_verbose, "", " -> Backgrounding job %s\n", cmdline);
-            outsourced = fork();
-#endif
+            pfp =
+                cf_popen_powershell_setuid(cmdline, "r", a.contain.owner, a.contain.group, a.contain.chdir, a.contain.chroot,
+                                  a.transaction.background);
+#else // !__MINGW32__
+            Log(LOG_LEVEL_ERR, "Powershell is only supported on Windows");
+            return ACTION_RESULT_FAILED;
+#endif // !__MINGW32__
+        }
+        else if (a.contain.shelltype == SHELL_TYPE_USE)
+        {
+            pfp =
+                cf_popen_shsetuid(cmdline, "r", a.contain.owner, a.contain.group, a.contain.chdir, a.contain.chroot,
+                                  a.transaction.background);
         }
         else
         {
-            outsourced = false;
+            pfp =
+                cf_popensetuid(cmdline, "r", a.contain.owner, a.contain.group, a.contain.chdir, a.contain.chroot,
+                               a.transaction.background);
         }
 
-        if (outsourced || (!a.transaction.background))    // work done here: either by child or non-background parent
+        if (pfp == NULL)
         {
-            if (a.contain.timeout != CF_NOINT)
+            Log(LOG_LEVEL_ERR, "Couldn't open pipe to command '%s'. (cf_popen: %s)", cmdline, GetErrorStr());
+            return ACTION_RESULT_FAILED;
+        }
+
+        for (;;)
+        {
+            ssize_t res = CfReadLine(line, CF_BUFSIZE, pfp);
+
+            if (res == 0)
             {
-                SetTimeOut(a.contain.timeout);
+                break;
             }
 
-#ifndef __MINGW32__
-            CfOut(cf_verbose, "", " -> (Setting umask to %jo)\n", (uintmax_t)a.contain.umask);
-            maskval = umask(a.contain.umask);
-
-            if (a.contain.umask == 0)
+            if (res == -1)
             {
-                CfOut(cf_verbose, "", " !! Programming %s running with umask 0! Use umask= to set\n", cmdline);
-            }
-#endif /* !__MINGW32__ */
-
-            if (a.contain.useshell)
-            {
-                pfp =
-                    cf_popen_shsetuid(cmdline, "r", a.contain.owner, a.contain.group, a.contain.chdir, a.contain.chroot,
-                                      a.transaction.background);
-            }
-            else
-            {
-                pfp =
-                    cf_popensetuid(cmdline, "r", a.contain.owner, a.contain.group, a.contain.chdir, a.contain.chroot,
-                                   a.transaction.background);
-            }
-
-            if (pfp == NULL)
-            {
-                CfOut(cf_error, "cf_popen", "!! Couldn't open pipe to command %s\n", cmdline);
+                Log(LOG_LEVEL_ERR, "Unable to read output from command '%s'. (fread: %s)", cmdline, GetErrorStr());
+                cf_pclose(pfp);
                 return ACTION_RESULT_FAILED;
             }
 
-            while (!feof(pfp))
+            if (strstr(line, "cfengine-die"))
             {
-                if (ferror(pfp))        /* abortable */
-                {
-                    CfOut(cf_error, "ferror", "!! Command pipe %s\n", cmdline);
-                    cf_pclose(pfp);
-                    return ACTION_RESULT_TIMEOUT;
-                }
-
-                if (CfReadLine(line, CF_BUFSIZE - 1, pfp) == -1)
-                {
-                    FatalError("Error in CfReadLine");
-                }
-
-                if (strstr(line, "cfengine-die"))
-                {
-                    break;
-                }
-
-                if (ferror(pfp))        /* abortable */
-                {
-                    CfOut(cf_error, "ferror", "!! Command pipe %s\n", cmdline);
-                    cf_pclose(pfp);
-                    return ACTION_RESULT_TIMEOUT;
-                }
-
-                if (a.contain.preview)
-                {
-                    PreviewProtocolLine(line, cmdline);
-                }
-
-                if (a.module)
-                {
-                    ModuleProtocol(cmdline, line, !a.contain.nooutput, pp->ns);
-                }
-                else if ((!a.contain.nooutput) && (NonEmptyLine(line)))
-                {
-                    lineOutLen = strlen(comm) + strlen(line) + 12;
-
-                    // if buffer is to small for this line, output it directly
-                    if (lineOutLen > sizeof(cmdOutBuf))
-                    {
-                        CfOut(cf_cmdout, "", "Q: \"...%s\": %s\n", comm, line);
-                    }
-                    else
-                    {
-                        if (cmdOutBufPos + lineOutLen > sizeof(cmdOutBuf))
-                        {
-                            CfOut(cf_cmdout, "", "%s", cmdOutBuf);
-                            cmdOutBufPos = 0;
-                        }
-                        sprintf(cmdOutBuf + cmdOutBufPos, "Q: \"...%s\": %s\n", comm, line);
-                        cmdOutBufPos += (lineOutLen - 1);
-                    }
-                    count++;
-                }
+                break;
             }
-#ifdef __MINGW32__
-            if (outsourced)     // only get return value if we waited for command execution
+
+            if (a.contain.preview)
             {
-                cf_pclose(pfp);
+                PreviewProtocolLine(line, cmdline);
+            }
+
+            if (a.module)
+            {
+                ModuleProtocol(ctx, cmdline, line, !a.contain.nooutput, PromiseGetNamespace(pp));
+            }
+            else if ((!a.contain.nooutput) && (!EmptyString(line)))
+            {
+                lineOutLen = strlen(comm) + strlen(line) + 12;
+
+                // if buffer is to small for this line, output it directly
+                if (lineOutLen > sizeof(cmdOutBuf))
+                {
+                    Log(LOG_LEVEL_NOTICE, "Q: '%s': %s", comm, line);
+                }
+                else
+                {
+                    if (cmdOutBufPos + lineOutLen > sizeof(cmdOutBuf))
+                    {
+                        Log(LOG_LEVEL_NOTICE, "%s", cmdOutBuf);
+                        cmdOutBufPos = 0;
+                    }
+                    sprintf(cmdOutBuf + cmdOutBufPos, "Q: \"...%s\": %s\n", comm, line);
+                    cmdOutBufPos += (lineOutLen - 1);
+                }
+                count++;
+            }
+        }
+#ifdef __MINGW32__
+        if (outsourced)     // only get return value if we waited for command execution
+        {
+            cf_pclose(pfp);
+        }
+        else
+#endif /* __MINGW32__ */
+        {
+            int ret = cf_pclose(pfp);
+
+            if (ret == -1)
+            {
+                cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_FAIL, pp, a, "Finished script '%s' - failed (abnormal termination)", pp->promiser);
             }
             else
             {
-                cf_pclose_def(pfp, a, pp);
+                VerifyCommandRetcode(ctx, ret, true, a, pp);
             }
-#else /* !__MINGW32__ */
-            cf_pclose_def(pfp, a, pp);
-#endif
         }
+    }
 
-        if (count)
+    if (count)
+    {
+        if (cmdOutBufPos)
         {
-            if (cmdOutBufPos)
-            {
-                CfOut(cf_cmdout, "", "%s", cmdOutBuf);
-            }
-
-            CfOut(cf_cmdout, "", "I: Last %d quoted lines were generated by promiser \"%s\"\n", count, cmdline);
+            Log(LOG_LEVEL_NOTICE, "%s", cmdOutBuf);
         }
 
-        if (a.contain.timeout != CF_NOINT)
-        {
-            alarm(0);
-            signal(SIGALRM, SIG_DFL);
-        }
+        Log(LOG_LEVEL_INFO, "Last %d quoted lines were generated by promiser '%s'", count, cmdline);
+    }
 
-        CfOut(cf_inform, "", " -> Completed execution of %s\n", cmdline);
+    if (a.contain.timeout != CF_NOINT)
+    {
+        alarm(0);
+        signal(SIGALRM, SIG_DFL);
+    }
+
+    Log(LOG_LEVEL_INFO, "Completed execution of '%s'", cmdline);
 #ifndef __MINGW32__
-        umask(maskval);
+    umask(maskval);
 #endif
 
-        snprintf(eventname, CF_BUFSIZE - 1, "Exec(%s)", cmdline);
+    snprintf(eventname, CF_BUFSIZE - 1, "Exec(%s)", cmdline);
 
 #ifndef __MINGW32__
-        if ((a.transaction.background) && outsourced)
-        {
-            CfOut(cf_verbose, "", " -> Backgrounded command (%s) is done - exiting\n", cmdline);
-            exit(0);
-        }
+    if ((a.transaction.background) && outsourced)
+    {
+        Log(LOG_LEVEL_VERBOSE, "Backgrounded command '%s' is done - exiting", cmdline);
+        exit(0);
+    }
 #endif /* !__MINGW32__ */
 
-        return ACTION_RESULT_OK;
-    }
+    return ACTION_RESULT_OK;
 }
 
 /*************************************************************/
@@ -420,7 +438,7 @@ void PreviewProtocolLine(char *line, char *comm)
      */
 
     char *prefixes[] =
-{
+    {
         ":silent:",
         ":inform:",
         ":verbose:",
@@ -456,5 +474,5 @@ void PreviewProtocolLine(char *line, char *comm)
         }
     }
 
-    CfOut(cf_verbose, "", "%s (preview of %s)\n", message, comm);
+    Log(LOG_LEVEL_VERBOSE, "'%s', preview of '%s'", message, comm);
 }

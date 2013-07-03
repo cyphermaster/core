@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -64,7 +64,6 @@ bool IsStrCaseIn(const char *str, const char **strs);
 char **String2StringArray(char *str, char separator);
 void FreeStringArray(char **strs);
 
-int SubStrnCopyChr(char *to, const char *from, int len, char sep);
 int CountChar(const char *string, char sp);
 void ReplaceChar(char *in, char *out, int outSz, char from, char to);
 void ReplaceTrailingChar(char *str, char from, char to);
@@ -88,5 +87,56 @@ int StripTrailingNewline(char *str, size_t max_length);
  * @return 0 if successful, -1 if Chop was called on a string that seemed to have no terminator
  */
 int Chop(char *str, size_t max_length);
+
+/**
+ * @brief Check if a string ends with the given suffix
+ * @param str
+ * @param suffix
+ * @return True if suffix matches
+ */
+bool StringEndsWith(const char *str, const char *suffix);
+
+/**
+ * @brief Check if a string starts with the given prefix
+ * @param str
+ * @param prefix
+ * @return True if prefix matches
+ */
+bool StringStartsWith(const char *str, const char *prefix);
+
+/**
+ * @brief Format string like vsprintf and return formatted string allocated
+ * on heap as a return value.
+ */
+char *StringVFormat(const char *fmt, va_list ap);
+
+/**
+ * @brief Format string like sprintf and return formatted string allocated on
+ * heap as a return value.
+ *
+ * @param format Formatting string
+
+ * @return formatted string (on heap) or NULL in case of error. errno is set in
+ * the latter case (see errno codes for sprintf).
+ */
+char *StringFormat(const char *fmt, ...) FUNC_ATTR_PRINTF(1, 2);
+
+/**
+ * @brief Find the initial segment of memory (up to #n bytes) consisting of character #c.
+ *
+ * @return first byte which is not #c, or #mem + #n if all bytes in memory segment are #c
+ */
+void *MemSpan(const void *mem, char c, size_t n);
+
+/**
+ * @brief Find the initial segment of memory (up to #n bytes) consisting not of character #c.
+ *
+ * @return first byte which is #c, or #mem + #n if none of bytes in memory segment are #c
+ */
+void *MemSpanInverse(const void *mem, char c, size_t n);
+
+bool CompareStringOrRegex(const char *value, const char *compareTo, bool regex);
+bool StringNotMatchingSetCapped(const char *isp, int limit, 
+                      const char *exclude, char *obuf);
 
 #endif

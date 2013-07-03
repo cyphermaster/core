@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -27,16 +27,12 @@
 
 /* See variables in cf3globals.c and syntax.c */
 
+extern bool LEGACY_OUTPUT;
+
 extern pid_t ALARM_PID;
 extern RSA *PRIVKEY, *PUBKEY;
-extern char PUBKEY_DIGEST[CF_MAXVARSIZE];
 extern char BINDINTERFACE[CF_BUFSIZE];
-extern const Sock ECGSOCKS[ATTR];
 
-extern Audit *AUDITPTR;
-extern Audit *VAUDIT;
-
-extern char CONTEXTID[];
 extern Item *IPADDRESSES;
 
 extern char STR_CFENGINEPORT[16];
@@ -44,11 +40,7 @@ extern unsigned short SHORT_CFENGINEPORT;
 extern time_t CONNTIMEOUT;
 
 extern char CFLOCK[CF_BUFSIZE];
-extern char CFLOG[CF_BUFSIZE];
-extern char CFLAST[CF_BUFSIZE];
 
-extern char CFPUBKEYFILE[CF_BUFSIZE];
-extern char CFPRIVKEYFILE[CF_BUFSIZE];
 extern char CFWORKDIR[CF_BUFSIZE];
 
 extern char VYEAR[];
@@ -57,29 +49,20 @@ extern char VMONTH[];
 extern char VSHIFT[];
 
 extern const char *CLASSTEXT[];
-extern int AUDIT;
 
-extern int ERRORCOUNT;
 extern time_t CFSTARTTIME;
 extern time_t CFINITSTARTTIME;
 
 extern struct utsname VSYSNAME;
-extern char VIPADDRESS[];
+extern char VIPADDRESS[CF_MAX_IP_LEN];
 extern char VPREFIX[];
 
 extern char VDOMAIN[CF_MAXVARSIZE];
-extern enum classes VSYSTEMHARDCLASS;
+extern PlatformContext VSYSTEMHARDCLASS;
 extern char VFQNAME[];
 extern char VUQNAME[];
 
-extern int DEBUG;
-
-extern int PARSING;
-
-extern int VERBOSE;
-extern int INFORM;
-
-extern int DONTDO;
+extern bool DONTDO;
 extern int IGNORELOCK;
 extern bool MINUSF;
 
@@ -93,40 +76,20 @@ extern int VEXPIREAFTER;
 
 extern const char *OBS[CF_OBSERVABLES][2];
 
-extern int FIPS_MODE;
-extern char POLICY_SERVER[CF_BUFSIZE];
-extern int LICENSES;
-extern int AM_NOVA;
-extern char EXPIRY[CF_SMALLBUF];
-extern char LICENSE_COMPANY[CF_SMALLBUF];
-extern int CF_TOPICS;
-extern int CF_OCCUR;
-extern enum cfhashes CF_DEFAULT_DIGEST;
+extern bool FIPS_MODE;
+extern char POLICY_SERVER[CF_MAX_IP_LEN];
+extern HashMethod CF_DEFAULT_DIGEST;
 extern int CF_DEFAULT_DIGEST_LEN;
-extern Item *EDIT_ANCHORS;
 
 extern Scope *VSCOPE;
-extern Audit *AUDITPTR;
-extern Audit *VAUDIT;
-extern PromiseIdent *PROMISE_ID_LIST;
-extern Item *DONELIST;
-extern char *CBUNDLESEQUENCE_STR;
-extern Item *ROTATED;
-extern Rlist *GOALS;
-
 extern Rlist *CF_STCK;
-extern int EDIT_MODEL;
-extern int CF_STCKFRAME;
-extern int AM_BACKGROUND_PROCESS;
+
 extern int CF_PERSISTENCE;
 extern int LOOKUP;
-extern int BOOTSTRAP;
 
-extern const char *CF_DATATYPES[];
 extern const char *CF_AGENTTYPES[];
 
 extern int CFA_MAXTHREADS;
-extern const char *THIS_BUNDLE;
 extern AgentType THIS_AGENT_TYPE;
 extern int SHOWREPORTS;
 extern time_t PROMISETIME;

@@ -1,26 +1,25 @@
-/* 
-   Copyright (C) Cfengine AS
+/*
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
    Free Software Foundation; version 3.
-   
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
-  You should have received a copy of the GNU General Public License  
+
+  You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
 #include "verify_measurements.h"
@@ -28,33 +27,32 @@
 #include "promises.h"
 #include "files_names.h"
 #include "attributes.h"
-#include "cfstream.h"
-#include "logging.h"
+#include "policy.h"
+#include "cf-monitord-enterprise-stubs.h"
+#include "env_context.h"
+#include "ornaments.h"
+
 #ifdef HAVE_NOVA
 #include "history.h"
 #endif
 
-#ifndef HAVE_NOVA
-static void VerifyMeasurement(double *this, Attributes a, Promise *pp);
-#endif
-
-static int CheckMeasureSanity(Attributes a, Promise *pp);
+static bool CheckMeasureSanity(Measurement m, Promise *pp);
 
 /*****************************************************************************/
 
-void VerifyMeasurementPromise(double *this, Promise *pp)
+void VerifyMeasurementPromise(EvalContext *ctx, double *this, Promise *pp)
 {
     Attributes a = { {0} };
 
-    if (pp->done)
+    if (EvalContextPromiseIsDone(ctx, pp))
     {
-        if (pp->ref)
+        if (pp->comment)
         {
-            CfOut(cf_verbose, "", "Skipping static observation %s (%s), already done", pp->promiser, pp->ref);
+            Log(LOG_LEVEL_VERBOSE, "Skipping static observation '%s' (comment: %s), already done", pp->promiser, pp->comment);
         }
         else
         {
-            CfOut(cf_verbose, "", "Skipping static observation %s, already done", pp->promiser);
+            Log(LOG_LEVEL_VERBOSE, "Skipping static observation '%s', already done", pp->promiser);
         }
 
         return;
@@ -62,41 +60,42 @@ void VerifyMeasurementPromise(double *this, Promise *pp)
 
     PromiseBanner(pp);
 
-    a = GetMeasurementAttributes(pp);
+    a = GetMeasurementAttributes(ctx, pp);
 
-    if (!CheckMeasureSanity(a, pp))
+    if (!CheckMeasureSanity(a.measure, pp))
     {
+        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_INTERRUPTED, pp, a, "Measurement promise is not valid");
         return;
     }
 
-    VerifyMeasurement(this, a, pp);
+    VerifyMeasurement(ctx, this, a, pp);
 }
 
 /*****************************************************************************/
 
-static int CheckMeasureSanity(Attributes a, Promise *pp)
+static bool CheckMeasureSanity(Measurement m, Promise *pp)
 {
     int retval = true;
 
     if (!IsAbsPath(pp->promiser))
     {
-        cfPS(cf_error, CF_INTERPT, "", pp, a, "The promiser \"%s\" of a measurement was not an absolute path",
+        Log(LOG_LEVEL_ERR, "The promiser '%s' of a measurement was not an absolute path",
              pp->promiser);
-        PromiseRef(cf_error, pp);
+        PromiseRef(LOG_LEVEL_ERR, pp);
         retval = false;
     }
 
-    if (a.measure.data_type == DATA_TYPE_NONE)
+    if (m.data_type == DATA_TYPE_NONE)
     {
-        cfPS(cf_error, CF_INTERPT, "", pp, a, "The promiser \"%s\" did not specify a data type\n", pp->promiser);
-        PromiseRef(cf_error, pp);
+        Log(LOG_LEVEL_ERR, "The promiser '%s' did not specify a data type", pp->promiser);
+        PromiseRef(LOG_LEVEL_ERR, pp);
         retval = false;
     }
     else
     {
-        if ((a.measure.history_type) && (strcmp(a.measure.history_type, "weekly") == 0))
+        if ((m.history_type) && (strcmp(m.history_type, "weekly") == 0))
         {
-            switch (a.measure.data_type)
+            switch (m.data_type)
             {
             case DATA_TYPE_COUNTER:
             case DATA_TYPE_STRING:
@@ -105,42 +104,33 @@ static int CheckMeasureSanity(Attributes a, Promise *pp)
                 break;
 
             default:
-                cfPS(cf_error, CF_INTERPT, "", pp, a,
-                     "The promiser \"%s\" cannot have history type weekly as it is not a number\n", pp->promiser);
-                PromiseRef(cf_error, pp);
+                Log(LOG_LEVEL_ERR, "The promiser '%s' cannot have history type weekly as it is not a number", pp->promiser);
+                PromiseRef(LOG_LEVEL_ERR, pp);
                 retval = false;
                 break;
             }
         }
     }
 
-    if ((a.measure.select_line_matching) && (a.measure.select_line_number != CF_NOINT))
+    if ((m.select_line_matching) && (m.select_line_number != CF_NOINT))
     {
-        cfPS(cf_error, CF_INTERPT, "", pp, a,
-             "The promiser \"%s\" cannot select both a line by pattern and by number\n", pp->promiser);
-        PromiseRef(cf_error, pp);
+        Log(LOG_LEVEL_ERR, "The promiser '%s' cannot select both a line by pattern and by number", pp->promiser);
+        PromiseRef(LOG_LEVEL_ERR, pp);
         retval = false;
     }
 
-    if (!a.measure.extraction_regex)
+    if (!m.extraction_regex)
     {
-        CfOut(cf_verbose, "", "No extraction regex, so assuming whole line is the value");
+        Log(LOG_LEVEL_VERBOSE, "No extraction regex, so assuming whole line is the value");
     }
     else
     {
-        if ((!strchr(a.measure.extraction_regex, '(')) && (!strchr(a.measure.extraction_regex, ')')))
+        if ((!strchr(m.extraction_regex, '(')) && (!strchr(m.extraction_regex, ')')))
         {
-            cfPS(cf_error, CF_INTERPT, "", pp, a,
-                 "The extraction_regex must contain a single backreference for the extraction\n");
+            Log(LOG_LEVEL_ERR, "The extraction_regex must contain a single backreference for the extraction");
             retval = false;
         }
     }
 
     return retval;
 }
-
-#ifndef HAVE_NOVA
-static void VerifyMeasurement(double *this, Attributes a, Promise *pp)
-{
-}
-#endif

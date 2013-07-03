@@ -1,12 +1,10 @@
-#include <setjmp.h>
-#include <sys/types.h>
-#include <stdarg.h>
-#include "cmockery.h"
+#include "test.h"
+#include <string.h>
 #include "list.c"
 #include "list.h"
 
 // Simple initialization test
-static void test_initList(void **state)
+static void test_initList(void)
 {
     List *list = NULL;
     list = ListNew(NULL, NULL, NULL);
@@ -17,19 +15,20 @@ static void test_initList(void **state)
     assert_int_equal(list->last, NULL);
     assert_int_equal(list->node_count, 0);
     assert_int_equal(list->state, 0);
+    // We shouldn't use this function yet, but otherwise we leak memory
+    assert_int_equal(ListDestroy(&list), 0);
 }
 
 // This function is just an example function for the destroyer
 #include <stdio.h>
 void testDestroyer(void *element) {
     // We know the elements are just char *
-    // However we cannot free them because they are stack allocated
-    // so we just print them
     char *s = (char *)element;
     printf("element: %s \n", s);
+    free (s);
 }
 
-static void test_destroyer(void **state)
+static void test_destroyer(void)
 {
     List *list = NULL;
     list = ListNew(NULL, NULL, testDestroyer);
@@ -44,10 +43,10 @@ static void test_destroyer(void **state)
     assert_int_equal(list->copy, NULL);
     assert_int_not_equal(list->destroy, NULL);
 
-    char element0[] = "this is a test string";
-    char element1[] = "another test string";
-    char element2[] = "yet another test string";
-    char element3[] = "and one more test string";
+    char *element0 = xstrdup("this is a test string");
+    char *element1 = xstrdup("another test string");
+    char *element2 = xstrdup("yet another test string");
+    char *element3 = xstrdup("and one more test string");
 
     // We add element0 to the list.
     assert_int_equal(ListPrepend(list, element0), 0);
@@ -62,7 +61,7 @@ static void test_destroyer(void **state)
     assert_int_equal(ListDestroy(&list), 0);
 }
 
-static void test_prependToList(void **state)
+static void test_prependToList(void)
 {
     List *list = NULL;
     list = ListNew(NULL, NULL, testDestroyer);
@@ -77,8 +76,8 @@ static void test_prependToList(void **state)
     assert_int_equal(list->copy, NULL);
     assert_int_not_equal(list->destroy, NULL);
 
-    char element0[] = "this is a test string";
-    char element1[] = "another test string";
+    char *element0 = xstrdup("this is a test string");
+    char *element1 = xstrdup("another test string");
     void *listPointer = NULL;
     void *firstPointer = NULL;
     void *lastPointer = NULL;
@@ -111,14 +110,12 @@ static void test_prependToList(void **state)
 
     // Now we try to destroy the list. This should fail because the list is not empty
     assert_int_equal(ListDestroy(&list), 0);
-    // Yes, we are leaking memory here but we shouldn't be using the remove function until we
-    // know that it works.
 }
 
-static void test_appendToList(void **state)
+static void test_appendToList(void)
 {
     List *list = NULL;
-    list = ListNew(NULL, NULL, NULL);
+    list = ListNew(NULL, NULL, testDestroyer);
     assert_true(list != NULL);
     assert_int_not_equal(list, NULL);
     assert_int_equal(list->first, NULL);
@@ -126,10 +123,9 @@ static void test_appendToList(void **state)
     assert_int_equal(list->last, NULL);
     assert_int_equal(list->node_count, 0);
     assert_int_equal(list->state, 0);
-    assert_int_equal(list->destroy, NULL);
 
-    char element0[] = "this is a test string";
-    char element1[] = "another test string";
+    char *element0 = xstrdup("this is a test string");
+    char *element1 = xstrdup("another test string");
     void *element0tPointer = NULL;
 
     // We add element0 to the list.
@@ -159,9 +155,6 @@ static void test_appendToList(void **state)
 
     // Now we try to destroy the list. This should fail because the list is not empty
     assert_int_equal(ListDestroy(&list), 0);
-
-    // Yes, we are leaking memory here but we shouldn't be using the remove function until we
-    // know that it works.
 }
 
 static int compareFunction(const void *a, const void *b)
@@ -180,7 +173,7 @@ static void copyFunction(const void *s, void **d)
 }
 
 
-static void test_removeFromList(void **state)
+static void test_removeFromList(void)
 {
     List *list = NULL;
     list = ListNew(compareFunction, NULL, testDestroyer);
@@ -195,11 +188,11 @@ static void test_removeFromList(void **state)
     assert_int_not_equal(list->compare, NULL);
     assert_int_equal(list->copy, NULL);
 
-    char element0[] = "this is a test string";
-    char element1[] = "another test string";
-    char element2[] = "yet another test string";
-    char element3[] = "and one more test string";
-    char element4[] = "non existing element";
+    char *element0 = xstrdup("this is a test string");
+    char *element1 = xstrdup("another test string");
+    char *element2 = xstrdup("yet another test string");
+    char *element3 = xstrdup("and one more test string");
+    char *element4 = xstrdup("non existing element");
     void *listPointer = NULL;
     void *firstPointer = NULL;
     void *secondPointer = NULL;
@@ -323,12 +316,13 @@ static void test_removeFromList(void **state)
 
     // Now we destroy the list.
     assert_int_equal(ListDestroy(&list), 0);
+    free (element4);
 }
 
-static void test_destroyList(void **state)
+static void test_destroyList(void)
 {
     List *list = NULL;
-    list = ListNew(NULL, NULL, NULL);
+    list = ListNew(NULL, NULL, testDestroyer);
     assert_true(list != NULL);
     assert_int_not_equal(list, NULL);
     assert_int_equal(list->first, NULL);
@@ -342,7 +336,7 @@ static void test_destroyList(void **state)
     assert_int_equal(list, NULL);
 }
 
-static void test_copyList(void **state)
+static void test_copyList(void)
 {
     /*
      * First try the normal path, i.e. with a copy function. Then try it without a copy function.
@@ -351,11 +345,11 @@ static void test_copyList(void **state)
     List *list2 = NULL;
     List *list3 = NULL;
     List *list4 = NULL;
-    char element0[] = "this is a test string";
-    char element1[] = "another test string";
-    char element2[] = "yet another test string";
+    char *element0 = xstrdup("this is a test string");
+    char *element1 = xstrdup("another test string");
+    char *element2 = xstrdup("yet another test string");
 
-    list1 = ListNew(compareFunction, copyFunction, NULL);
+    list1 = ListNew(compareFunction, copyFunction, testDestroyer);
     assert_true(list1 != NULL);
     assert_int_not_equal(list1, NULL);
     assert_int_equal(list1->first, NULL);
@@ -398,13 +392,17 @@ static void test_copyList(void **state)
     assert_true(list1->ref_count == list3->ref_count);
     assert_false(list1->ref_count == list4->ref_count);
     assert_false(list4->ref_count == list3->ref_count);
+
+    assert_int_equal(ListDestroy(&list1), 0);
+    assert_int_equal(ListDestroy(&list2), 0);
+    assert_int_equal(ListDestroy(&list3), 0);
+    assert_int_equal(ListDestroy(&list4), 0);
     /*
      * No copy function now, boys don't cry
      */
     List *list5 = NULL;
     List *list6 = NULL;
-    List *list7 = NULL;
-    List *list8 = NULL;
+    element0 = xstrdup("this is a test string");
 
     list5 = ListNew(compareFunction, NULL, testDestroyer);
     assert_true(list5 != NULL);
@@ -419,39 +417,13 @@ static void test_copyList(void **state)
     /*
      * Copy the list5 to list6 and prepend one more element
      */
-    assert_int_equal(0, ListCopy(list5, &list6));
-    assert_int_equal(1, ListCount(list6));
-    assert_true(list5->ref_count == list6->ref_count);
-    assert_int_equal(0, ListPrepend(list6, (void *)element1));
-    /*
-     * The two lists have detached now.
-     */
-    assert_int_equal(1, ListCount(list5));
-    assert_int_equal(2, ListCount(list6));
-    assert_false(list5->ref_count == list6->ref_count);
-    /*
-     * Add one more element to list5 and then attach list7 and list8.
-     * Finally detach list8 by removing one element.
-     */
-    assert_int_equal(0, ListPrepend(list5, (void *)element2));
-    assert_int_equal(0, ListCopy(list5, &list7));
-    assert_int_equal(0, ListCopy(list5, &list8));
-    assert_int_equal(2, ListCount(list5));
-    assert_int_equal(2, ListCount(list7));
-    assert_int_equal(2, ListCount(list8));
-    assert_true(list5->ref_count == list7->ref_count);
-    assert_true(list5->ref_count == list8->ref_count);
-    assert_true(list8->ref_count == list7->ref_count);
-    assert_int_equal(0, ListRemove(list8, (void *)element0));
-    assert_int_equal(2, ListCount(list5));
-    assert_int_equal(2, ListCount(list7));
-    assert_int_equal(1, ListCount(list8));
-    assert_true(list5->ref_count == list7->ref_count);
-    assert_false(list5->ref_count == list8->ref_count);
-    assert_false(list8->ref_count == list7->ref_count);
+    assert_int_equal(-1, ListCopy(list5, &list6));
+    assert_true(list6 == NULL);
+
+    assert_int_equal(ListDestroy(&list5), 0);
 }
 
-static void test_iterator(void **state)
+static void test_iterator(void)
 {
     List *list = NULL;
     list = ListNew(compareFunction, NULL, testDestroyer);
@@ -464,12 +436,12 @@ static void test_iterator(void **state)
     assert_int_equal(list->state, 0);
 
     ListIterator *emptyListIterator = NULL;
-    assert_int_equal(-1, ListIteratorGet(list, &emptyListIterator));
+    emptyListIterator = ListIteratorGet(list);
     assert_true(emptyListIterator == NULL);
-    char element0[] = "this is a test string";
-    char element1[] = "another test string";
-    char element2[] = "yet another test string";
-    char element3[] = "and one more test string";
+    char *element0 = xstrdup("this is a test string");
+    char *element1 = xstrdup("another test string");
+    char *element2 = xstrdup("yet another test string");
+    char *element3 = xstrdup("and one more test string");
     void *element0Pointer = NULL;
     void *element1Pointer = NULL;
     void *element2Pointer = NULL;
@@ -527,9 +499,9 @@ static void test_iterator(void **state)
     assert_int_equal(list->state, 0);
 
     ListIterator *iterator0 = NULL;
-    assert_int_equal(ListIteratorGet(list, &iterator0), 0);
+    iterator0 = ListIteratorGet(list);
     // Check the iterator
-    assert_int_not_equal(iterator0, NULL);
+    assert_true(iterator0 != NULL);
     assert_int_equal(iterator0->state, 0);
     assert_true(iterator0->origin == list);
     assert_true(iterator0->current == list->first);
@@ -544,7 +516,7 @@ static void test_iterator(void **state)
 
     // Create a new iterator and move it
     ListIterator *iterator1 = NULL;
-    assert_int_equal(ListIteratorGet(list, &iterator1), 0);
+    iterator1 = ListIteratorGet(list);
     // Check the iterator
     assert_int_not_equal(iterator1, NULL);
     assert_int_equal(iterator1->state, 1);
@@ -597,6 +569,7 @@ static void test_iterator(void **state)
     assert_true(value == element0);
 
     // Go back
+    assert_true(ListIteratorHasPrevious(iterator1));
     assert_int_equal(ListIteratorPrevious(iterator1), 0);
     // Check the value, it should be equal to element2
     value = ListIteratorData(iterator1);
@@ -609,6 +582,7 @@ static void test_iterator(void **state)
     assert_true(value == element3);
 
     // Advance it
+    assert_true(ListIteratorHasNext(iterator1));
     assert_int_equal(ListIteratorNext(iterator1), 0);
     // Check the value, it should be equal to element2
     value = ListIteratorData(iterator1);
@@ -619,11 +593,13 @@ static void test_iterator(void **state)
     assert_int_equal(ListRemove(list, element0), 0);
     assert_int_equal(ListRemove(list, element2), 0);
 
+    // Destroy the iterator
+    assert_int_equal(ListIteratorDestroy(&iterator1), 0);
     // Now we destroy the list.
     assert_int_equal(ListDestroy(&list), 0);
 }
 
-static void test_mutableIterator(void **state)
+static void test_mutableIterator(void)
 {
     List *list = NULL;
     list = ListNew(compareFunction, NULL, testDestroyer);
@@ -636,14 +612,16 @@ static void test_mutableIterator(void **state)
     assert_int_equal(list->state, 0);
 
     ListMutableIterator *emptyListIterator = NULL;
-    assert_int_equal(-1, ListMutableIteratorGet(list, &emptyListIterator));
+    emptyListIterator = ListMutableIteratorGet(list);
     assert_true(emptyListIterator == NULL);
-    char element0[] = "this is a test string";
-    char element1[] = "another test string";
-    char element2[] = "yet another test string";
-    char element3[] = "and one more test string";
-    char element4[] = "prepended by iterator";
-    char element5[] = "appended by iterator";
+    char *element0 = xstrdup("this is a test string");
+    char *element1 = xstrdup("another test string");
+    char *element2 = xstrdup("yet another test string");
+    char *element3 = xstrdup("and one more test string");
+    char *element4 = xstrdup("prepended by iterator");
+    char *element5 = xstrdup("appended by iterator");
+    char *element6 = xstrdup("appended by iterator, second time");
+    char *element7 = xstrdup("prepended by iterator, second time");
 
     // We add element0 to the list.
     assert_int_equal(ListAppend(list, element0), 0);
@@ -656,23 +634,27 @@ static void test_mutableIterator(void **state)
 
     // We use a light iterator to check that is valid
     ListIterator *lightIterator = NULL;
-    assert_int_equal(0, ListIteratorGet(list, &lightIterator));
+    lightIterator = ListIteratorGet(list);
     ListMutableIterator *iterator = NULL;
     ListMutableIterator *secondIterator = NULL;
-    assert_int_equal(0, ListMutableIteratorGet(list, &iterator));
+    iterator = ListMutableIteratorGet(list);
+    assert_true(iterator != NULL);
     // The iterator should be pointing to the first element
     assert_true(iterator->current == list->first);
     // Trying to create a second iterator must fail
-    assert_int_equal(-1, ListMutableIteratorGet(list, &secondIterator));
+    secondIterator = ListMutableIteratorGet(list);
+    assert_true(secondIterator == NULL);
     // Loop through the list until we get to the last element and then back
-    assert_int_equal(0, ListMutableIteratorNext(iterator));
-    assert_int_equal(0, ListMutableIteratorNext(iterator));
-    assert_int_equal(0, ListMutableIteratorNext(iterator));
+    while (ListMutableIteratorHasNext(iterator))
+    {
+        assert_int_equal(0, ListMutableIteratorNext(iterator));
+    }
     assert_int_equal(-1, ListMutableIteratorNext(iterator));
     // and back
-    assert_int_equal(0, ListMutableIteratorPrevious(iterator));
-    assert_int_equal(0, ListMutableIteratorPrevious(iterator));
-    assert_int_equal(0, ListMutableIteratorPrevious(iterator));
+    while (ListMutableIteratorHasPrevious(iterator))
+    {
+        assert_int_equal(0, ListMutableIteratorPrevious(iterator));
+    }
     assert_int_equal(-1, ListMutableIteratorPrevious(iterator));
     // Jump to the last element
     assert_int_equal(0, ListMutableIteratorLast(iterator));
@@ -692,19 +674,17 @@ static void test_mutableIterator(void **state)
     assert_int_equal(6, list->node_count);
     // The light iterator is still valid
     assert_int_equal(list->state, lightIterator->state);
-    // Iterate over the list until we get to the end and back
-    assert_int_equal(0, ListMutableIteratorNext(iterator));
-    assert_int_equal(0, ListMutableIteratorNext(iterator));
-    assert_int_equal(0, ListMutableIteratorNext(iterator));
-    assert_int_equal(0, ListMutableIteratorNext(iterator));
-    assert_int_equal(0, ListMutableIteratorNext(iterator));
+    // Loop through the list until we get to the last element and then back
+    while (ListMutableIteratorHasNext(iterator))
+    {
+        assert_int_equal(0, ListMutableIteratorNext(iterator));
+    }
     assert_int_equal(-1, ListMutableIteratorNext(iterator));
     // and back
-    assert_int_equal(0, ListMutableIteratorPrevious(iterator));
-    assert_int_equal(0, ListMutableIteratorPrevious(iterator));
-    assert_int_equal(0, ListMutableIteratorPrevious(iterator));
-    assert_int_equal(0, ListMutableIteratorPrevious(iterator));
-    assert_int_equal(0, ListMutableIteratorPrevious(iterator));
+    while (ListMutableIteratorHasPrevious(iterator))
+    {
+        assert_int_equal(0, ListMutableIteratorPrevious(iterator));
+    }
     assert_int_equal(-1, ListMutableIteratorPrevious(iterator));
     // Jump to the last element
     assert_int_equal(0, ListMutableIteratorLast(iterator));
@@ -713,7 +693,7 @@ static void test_mutableIterator(void **state)
     // And back to the last element
     assert_int_equal(0, ListMutableIteratorLast(iterator));
     // Append one element after the last element
-    assert_int_equal(0, ListMutableIteratorAppend(iterator, (void *)element5));
+    assert_int_equal(0, ListMutableIteratorAppend(iterator, (void *)element6));
     assert_int_equal(7, list->node_count);
     // The light iterator is still valid
     assert_int_equal(list->state, lightIterator->state);
@@ -722,23 +702,23 @@ static void test_mutableIterator(void **state)
     // Check that both the list and the iterator point to the same last element
     assert_true(iterator->current == list->last);
     // Prepend one element before the last element
-    assert_int_equal(0, ListMutableIteratorPrepend(iterator, (void *)element4));
+    assert_int_equal(0, ListMutableIteratorPrepend(iterator, (void *)element7));
     assert_int_equal(8, list->node_count);
     // The light iterator is still valid
     assert_int_equal(list->state, lightIterator->state);
     // Go back one element and remove the element
     assert_int_equal(0, ListMutableIteratorPrevious(iterator));
     // We should be located at element4
-    assert_string_equal(element4, (char *)iterator->current->payload);
+    assert_string_equal(element7, (char *)iterator->current->payload);
     // Remove the current element
     assert_int_equal(0, ListMutableIteratorRemove(iterator));
     // Check that the list agrees
     assert_int_equal(7, list->node_count);
     // We should be at element5 now, the last element of the list
-    assert_string_equal(element5, (char *)iterator->current->payload);
+    assert_string_equal(element6, (char *)iterator->current->payload);
     assert_true(iterator->current == list->last);
-    // The light iterator is invalid now
-    assert_true(lightIterator->state != list->state);
+    // The light iterator is not valid anymore
+    assert_false(list->state == lightIterator->state);
     // Remove the last element, we should go back to element3
     assert_int_equal(0, ListMutableIteratorRemove(iterator));
     // Check that the list agrees
@@ -797,7 +777,9 @@ static void test_mutableIterator(void **state)
 
 int main()
 {
-    const UnitTest tests[] = {
+    PRINT_TEST_BANNER();
+    const UnitTest tests[] =
+    {
         unit_test(test_initList)
         , unit_test(test_destroyList)
         , unit_test(test_destroyer)

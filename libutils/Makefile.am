@@ -1,6 +1,6 @@
 noinst_LTLIBRARIES = libutils.la
 
-libutils_la_LIBADD = ../pub/libcfpub.la
+libutils_la_LIBADD = ../libcompat/libcompat.la
 
 libutils_la_SOURCES = \
 	alloc.c alloc.h \
@@ -11,21 +11,25 @@ libutils_la_SOURCES = \
 	set.c set.h \
 	statistics.c statistics.h \
 	string_lib.c string_lib.h \
-	string_map.c string_map.h \
 	platform.h \
 	proc_keyvalue.c proc_keyvalue.h \
 	bool.h \
 	json.c json.h \
 	refcount.c refcount.h refcount_p.h \
-	list.c list.h list_p.h \
+	list.c list.h \
+	bufferlist.c bufferlist.h \
+	logging.c logging.h logging_priv.h\
 	buffer.c buffer.h \
+    ip_address.c ip_address.h \
 	map.c map.h map_common.h \
 	array_map.c array_map_priv.h \
 	hash_map.c hash_map_priv.h \
 	misc_lib.c misc_lib.h \
 	writer.c writer.h \
 	csv_writer.c csv_writer.h \
-	xml_writer.c writer.h
+	xml_writer.c xml_writer.h \
+	file_lib.c file_lib.h \
+	man.c man.h
 
 CLEANFILES = *.gcno *.gcda
 
@@ -39,11 +43,11 @@ MOSTLYCLEANFILES = *~ *.orig *.rej
 # "aclocal; autoconf; autoheader; automake --add-missing"
 # "configure; make; make install"
 #
-MAINTAINERCLEANFILES = conf.h.in
+MAINTAINERCLEANFILES = config.h.in
 
-# libcfpub dependency
+# libcompat dependency
 
-.PRECIOUS: ../pub/libcfpub.la
+.PRECIOUS: ../libcompat/libcompat.la
 
-../pub/libcfpub.la:
-	$(MAKE) -C ../pub $(AM_MAKEFLAGS) libcfpub.la
+../libcompat/libcompat.la:
+	$(MAKE) -C ../libcompat $(AM_MAKEFLAGS) libcompat.la

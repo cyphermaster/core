@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,14 +17,14 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
 
 #include "cf3.defs.h"
 
-const char *CLASSTEXT[HARD_CLASSES_MAX] =
+const char *CLASSTEXT[PLATFORM_CONTEXT_MAX] =
 {
     "<unknown>",
     "hpux",
@@ -45,7 +45,7 @@ const char *CLASSTEXT[HARD_CLASSES_MAX] =
     "vmware",
 };
 
-const char *VPSCOMM[HARD_CLASSES_MAX] =
+const char *VPSCOMM[PLATFORM_CONTEXT_MAX] =
 {
     "",
     "/bin/ps",                  /* hpux */
@@ -69,12 +69,12 @@ const char *VPSCOMM[HARD_CLASSES_MAX] =
 // linux after rhel 3: ps -eo user,pid,ppid,pgid,%cpu,%mem,vsize,ni,rss,stat,nlwp,stime,time,args
 // solaris: ps -eo user,pid,ppid,pgid,pcpu,pmem,vsz,pri,rss,nlwp,stime,time,args
 
-const char *VPSOPTS[HARD_CLASSES_MAX] =
+const char *VPSOPTS[PLATFORM_CONTEXT_MAX] =
 {
     "",
     "-ef",                      /* hpux */
     "-N -eo user,pid,ppid,pgid,pcpu,pmem,vsz,ni,stat,st=STIME,time,args",  /* aix */
-    "-eo user,pid,ppid,pgid,pcpu,pmem,vsz,pri,rss,nlwp,stime,time,args",        /* linux */
+    "-eo user,pid,ppid,pgid,pcpu,pmem,vsz,ni,rss,nlwp,stime,time,args",        /* linux */
     "-eo user,pid,ppid,pgid,pcpu,pmem,vsz,pri,rss,nlwp,stime,time,args",        /* solaris */
     "auxw",                     /* freebsd */
     "auxw",                     /* netbsd */
@@ -90,7 +90,7 @@ const char *VPSOPTS[HARD_CLASSES_MAX] =
     "?",                        /* vmware */
 };
 
-const char *VFSTAB[HARD_CLASSES_MAX] =
+const char *VFSTAB[PLATFORM_CONTEXT_MAX] =
 {
     "-",
     "/etc/fstab",               /* hpux */

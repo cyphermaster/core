@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,10 +17,9 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
 #ifndef CFENGINE_PIPES_H
@@ -28,17 +27,18 @@
 
 #include "cf3.defs.h"
 
-FILE *cf_popen(const char *command, char *type);
-FILE *cf_popensetuid(const char *command, char *type, uid_t uid, gid_t gid, char *chdirv, char *chrootv, int background);
-FILE *cf_popen_sh(const char *command, char *type);
-FILE *cf_popen_shsetuid(const char *command, char *type, uid_t uid, gid_t gid, char *chdirv, char *chrootv, int background);
+FILE *cf_popen(const char *command, const char *type, bool capture_stderr);
+FILE *cf_popensetuid(const char *command, const char *type, uid_t uid, gid_t gid, char *chdirv, char *chrootv, int background);
+FILE *cf_popen_sh(const char *command, const char *type);
+FILE *cf_popen_shsetuid(const char *command, const char *type, uid_t uid, gid_t gid, char *chdirv, char *chrootv, int background);
 int cf_pclose(FILE *pp);
-int cf_pclose_def(FILE *pfp, Attributes a, Promise *pp);
 bool PipeToPid(pid_t *pid, FILE *pp);
-int VerifyCommandRetcode(int retcode, int fallback, Attributes a, Promise *pp);
+bool PipeTypeIsOk(const char *type);
 
-#ifndef __MINGW32__
-int cf_pwait(pid_t pid);
-#endif /* !__MINGW32__ */
+#ifdef __MINGW32__
+FILE *cf_popen_powershell(const char *command, const char *type);
+FILE *cf_popen_powershell_setuid(const char *command, const char *type, uid_t uid, gid_t gid, char *chdirv, char *chrootv,
+                              int background);
+#endif
 
 #endif

@@ -1,31 +1,28 @@
-/* 
-   Copyright (C) Cfengine AS
+/*
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
    Free Software Foundation; version 3.
-   
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
-  You should have received a copy of the GNU General Public License  
+
+  You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
-
 */
 
 #include "signals.h"
-
-#include "cfstream.h"
 
 static const char *SIGNALS[] =
 {
@@ -59,23 +56,19 @@ bool IsPendingTermination(void)
 
 void HandleSignalsForAgent(int signum)
 {
-    CfOut(cf_error, "", "Received signal %d (%s) while doing [%s]", signum, SIGNALS[signum] ? SIGNALS[signum] : "NOSIG",
-          CFLOCK);
-    CfOut(cf_error, "", "Logical start time %s ", cf_ctime(&CFSTARTTIME));
-    CfOut(cf_error, "", "This sub-task started really at %s\n", cf_ctime(&CFINITSTARTTIME));
-    fflush(stdout);
-
     if ((signum == SIGTERM) || (signum == SIGINT))
     {
+        /* TODO don't exit from the signal handler, just set a flag. Reason is
+         * that all the atexit() hooks we register are not reentrant. */
         exit(0);
     }
     else if (signum == SIGUSR1)
     {
-        DEBUG = true;
+        LogSetGlobalLevel(LOG_LEVEL_DEBUG);
     }
     else if (signum == SIGUSR2)
     {
-        DEBUG = false;
+        LogSetGlobalLevel(LOG_LEVEL_NOTICE);
     }
 
 /* Reset the signal handler */
@@ -86,12 +79,6 @@ void HandleSignalsForAgent(int signum)
 
 void HandleSignalsForDaemon(int signum)
 {
-    CfOut(cf_error, "", "Received signal %d (%s) while doing [%s]", signum, SIGNALS[signum] ? SIGNALS[signum] : "NOSIG",
-          CFLOCK);
-    CfOut(cf_error, "", "Logical start time %s ", cf_ctime(&CFSTARTTIME));
-    CfOut(cf_error, "", "This sub-task started really at %s\n", cf_ctime(&CFINITSTARTTIME));
-    fflush(stdout);
-
     if ((signum == SIGTERM) || (signum == SIGINT) || (signum == SIGHUP) || (signum == SIGSEGV) || (signum == SIGKILL)
         || (signum == SIGPIPE))
     {
@@ -99,11 +86,11 @@ void HandleSignalsForDaemon(int signum)
     }
     else if (signum == SIGUSR1)
     {
-        DEBUG = true;
+        LogSetGlobalLevel(LOG_LEVEL_DEBUG);
     }
     else if (signum == SIGUSR2)
     {
-        DEBUG = false;
+        LogSetGlobalLevel(LOG_LEVEL_NOTICE);
     }
 
 /* Reset the signal handler */

@@ -48,10 +48,8 @@ bundle agent cfe_internal_update
                       "cf-agent",
                       "cf-execd",
                       "cf-key",
-                      "cf-know",
                       "cf-monitord",
                       "cf-promises",
-                      "cf-report",
                       "cf-runagent",
                       "cf-serverd",
                      },
@@ -114,7 +112,7 @@ bundle agent cfe_internal_update
 
   !have_ppkeys::
 
-   "$(sys.cf_key)",
+   "$(sys.cf_key)"
       comment => "Generate cfengine encryption keys if necessary",
        handle => "update_commands_generate_keys";
 

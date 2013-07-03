@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,13 +17,15 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
 
 #ifndef CFENGINE_CF_SERVERD_FUNCTIONS_H
 #define CFENGINE_CF_SERVERD_FUNCTIONS_H
+
+#include "platform.h"
 
 #include "generic_agent.h"
 #include "server.h"
@@ -39,21 +41,14 @@
 #include "promises.h"
 #include "item_lib.h"
 #include "conversion.h"
-#include "reporting.h"
 #include "xml_writer.h"
-#include "client_code.h"
 #include "pipes.h"
 
 void ThisAgentInit(void);
 GenericAgentConfig *CheckOpts(int argc, char **argv);
 int OpenReceiverChannel(void);
-void CheckFileChanges(Policy **policy, GenericAgentConfig *config, const ReportContext *report_context);
+void CheckFileChanges(EvalContext *ctx, Policy **policy, GenericAgentConfig *config);
 int InitServer(size_t queue_size);
-
-#if !defined(HAVE_GETADDRINFO)
-in_addr_t GetInetAddr(char *host);
-#endif
-
-void StartServer(Policy *policy, GenericAgentConfig *config, const ReportContext *report_context);
+void StartServer(EvalContext *ctx, Policy **policy, GenericAgentConfig *config);
 
 #endif // CFSERVERDFUNCTIONS_H

@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -29,18 +29,15 @@
 #include "dbm_api.h"
 #include "mod_access.h"
 #include "item_lib.h"
-#include "reporting.h"
-#include "cfstream.h"
 #include "logging.h"
 #include "rlist.h"
 
-#include <assert.h>
 
 static int IsSpace(char *remainder);
 
 /***************************************************************/
 
-char *MapAddress(char *unspec_address)
+const char *MapAddress(const char *unspec_address)
 {                               /* Is the address a mapped ipv4 over ipv6 address */
 
     if (strncmp(unspec_address, "::ffff:", 7) == 0)
@@ -53,95 +50,7 @@ char *MapAddress(char *unspec_address)
     }
 }
 
-/***************************************************************************/
-
-char *EscapeQuotes(const char *s, char *out, int outSz)
-{
-    char *spt;
-    const char *spf;
-    int i = 0;
-
-    memset(out, 0, outSz);
-
-    for (spf = s, spt = out; (i < outSz - 2) && (*spf != '\0'); spf++, spt++, i++)
-    {
-        switch (*spf)
-        {
-        case '\'':
-        case '\"':
-            *spt++ = '\\';
-            *spt = *spf;
-            i += 3;
-            break;
-
-        default:
-            *spt = *spf;
-            i++;
-            break;
-        }
-    }
-
-    return out;
-}
-
-/***************************************************************************/
-
-char *EscapeJson(char *s, char *out, int outSz)
-{
-    char *spt, *spf;
-    int i = 0;
-
-    memset(out, 0, outSz);
-
-    for (spf = s, spt = out; (i < outSz - 2) && (*spf != '\0'); spf++, spt++, i++)
-    {
-        switch (*spf)
-        {
-        case '\"':
-        case '\\':
-        case '/':
-            *spt++ = '\\';
-            *spt = *spf;
-            i += 2;
-            break;
-        case '\n':
-            *spt++ = '\\';
-            *spt = 'n';
-            i += 2;
-            break;
-        case '\t':
-            *spt++ = '\\';
-            *spt = 't';
-            i += 2;
-            break;
-        case '\r':
-            *spt++ = '\\';
-            *spt = 'r';
-            i += 2;
-            break;
-        case '\b':
-            *spt++ = '\\';
-            *spt = 'b';
-            i += 2;
-            break;
-        case '\f':
-            *spt++ = '\\';
-            *spt = 'f';
-            i += 2;
-            break;
-        default:
-            *spt = *spf;
-            i++;
-            break;
-        }
-    }
-
-    return out;
-}
-
-/***************************************************************************/
-
-static int FindTypeInArray(const char **haystack, const char *needle, int default_value, int null_value)
+int FindTypeInArray(const char **haystack, const char *needle, int default_value, int null_value)
 {
     if (needle == NULL)
     {
@@ -159,64 +68,108 @@ static int FindTypeInArray(const char **haystack, const char *needle, int defaul
     return default_value;
 }
 
-
-static const char *MEASURE_POLICY_TYPES[] = { "average", "sum", "first", "last",  NULL };
-
-enum cfmeasurepolicy MeasurePolicy2Value(char *s)
+MeasurePolicy MeasurePolicyFromString(const char *s)
 {
-    return FindTypeInArray(MEASURE_POLICY_TYPES, s, cfm_average, cfm_nomeasure);
+    static const char *MEASURE_POLICY_TYPES[] = { "average", "sum", "first", "last",  NULL };
+
+    return FindTypeInArray(MEASURE_POLICY_TYPES, s, MEASURE_POLICY_AVERAGE, MEASURE_POLICY_NONE);
 }
 
-static const char *ENV_STATE_TYPES[] = { "create", "delete", "running", "suspended", "down", NULL };
-
-enum cfenvironment_state Str2EnvState(char *s)
+EnvironmentState EnvironmentStateFromString(const char *s)
 {
-    return FindTypeInArray(ENV_STATE_TYPES, s, cfvs_none, cfvs_create);
+    static const char *ENV_STATE_TYPES[] = { "create", "delete", "running", "suspended", "down", NULL };
+
+    return FindTypeInArray(ENV_STATE_TYPES, s, ENVIRONMENT_STATE_NONE, ENVIRONMENT_STATE_CREATE);
 }
 
-static const char *INSERT_MATCH_TYPES[] = { "ignore_leading", "ignore_trailing", "ignore_embedded",
-                                            "exact_match", NULL };
-
-enum insert_match String2InsertMatch(char *s)
+InsertMatchType InsertMatchTypeFromString(const char *s)
 {
-    return FindTypeInArray(INSERT_MATCH_TYPES, s, cf_exact_match, cf_exact_match);
+    static const char *INSERT_MATCH_TYPES[] = { "ignore_leading", "ignore_trailing", "ignore_embedded",
+                                                "exact_match", NULL };
+
+    return FindTypeInArray(INSERT_MATCH_TYPES, s, INSERT_MATCH_TYPE_EXACT, INSERT_MATCH_TYPE_EXACT);
 }
 
-static const char *SYSLOG_PRIORITY_TYPES[] =
-{ "emergency", "alert", "critical", "error", "warning", "notice", "info", "debug", NULL };
-
-int SyslogPriority2Int(char *s)
+int SyslogPriorityFromString(const char *s)
 {
+    static const char *SYSLOG_PRIORITY_TYPES[] =
+    { "emergency", "alert", "critical", "error", "warning", "notice", "info", "debug", NULL };
+
     return FindTypeInArray(SYSLOG_PRIORITY_TYPES, s, 3, 3);
 }
 
-static const char *DB_TYPES[] = { "mysql", "postgres", NULL };
-
-enum cfdbtype Str2dbType(char *s)
+ShellType ShellTypeFromString(const char *string)
 {
-    return FindTypeInArray(DB_TYPES, s, cfd_notype, cfd_notype);
+    // For historical reasons, supports all CF_BOOL values (true/false/yes/no...),
+    // as well as "noshell,useshell,powershell".
+    char *start, *end;
+    char *options = "noshell,useshell,powershell," CF_BOOL;
+    int i;
+    int size;
+
+    if (string == NULL)
+    {
+        return SHELL_TYPE_NONE;
+    }
+
+    start = options;
+    size = strlen(string);
+    for (i = 0;; i++)
+    {
+        end = strchr(start, ',');
+        if (end == NULL)
+        {
+            break;
+        }
+        if (size == end - start && strncmp(string, start, end - start) == 0)
+        {
+            int cfBoolIndex;
+            switch (i)
+            {
+            case 0:
+                return SHELL_TYPE_NONE;
+            case 1:
+                return SHELL_TYPE_USE;
+            case 2:
+                return SHELL_TYPE_POWERSHELL;
+            default:
+                // Even cfBoolIndex is true, odd cfBoolIndex is false (from CF_BOOL).
+                cfBoolIndex = i-3;
+                return (cfBoolIndex & 1) ? SHELL_TYPE_NONE : SHELL_TYPE_USE;
+            }
+        }
+        start = end + 1;
+    }
+    return SHELL_TYPE_NONE;
 }
 
-static const char *PACKAGE_ACTION_TYPES[] =
-{ "add", "delete", "reinstall", "update", "addupdate", "patch", "verify", NULL };
-
-enum package_actions Str2PackageAction(char *s)
+DatabaseType DatabaseTypeFromString(const char *s)
 {
-    return FindTypeInArray(PACKAGE_ACTION_TYPES, s, cfa_pa_none, cfa_pa_none);
+    static const char *DB_TYPES[] = { "mysql", "postgres", NULL };
+
+    return FindTypeInArray(DB_TYPES, s, DATABASE_TYPE_NONE, DATABASE_TYPE_NONE);
 }
 
-static const char *PACKAGE_SELECT_TYPES[] = { "==", "!=", ">", "<", ">=", "<=", NULL };
-
-enum version_cmp Str2PackageSelect(char *s)
+PackageAction PackageActionFromString(const char *s)
 {
-    return FindTypeInArray(PACKAGE_SELECT_TYPES, s, cfa_cmp_none, cfa_cmp_none);
+    static const char *PACKAGE_ACTION_TYPES[] =
+    { "add", "delete", "reinstall", "update", "addupdate", "patch", "verify", NULL };
+
+    return FindTypeInArray(PACKAGE_ACTION_TYPES, s, PACKAGE_ACTION_NONE, PACKAGE_ACTION_NONE);
 }
 
-static const char *ACTION_POLICY_TYPES[] = { "individual", "bulk", NULL };
-
-enum action_policy Str2ActionPolicy(char *s)
+PackageVersionComparator PackageVersionComparatorFromString(const char *s)
 {
-    return FindTypeInArray(ACTION_POLICY_TYPES, s, cfa_no_ppolicy, cfa_no_ppolicy);
+    static const char *PACKAGE_SELECT_TYPES[] = { "==", "!=", ">", "<", ">=", "<=", NULL };
+
+    return FindTypeInArray(PACKAGE_SELECT_TYPES, s, PACKAGE_VERSION_COMPARATOR_NONE, PACKAGE_VERSION_COMPARATOR_NONE);
+}
+
+PackageActionPolicy PackageActionPolicyFromString(const char *s)
+{
+    static const char *ACTION_POLICY_TYPES[] = { "individual", "bulk", NULL };
+
+    return FindTypeInArray(ACTION_POLICY_TYPES, s, PACKAGE_ACTION_POLICY_NONE, PACKAGE_ACTION_POLICY_NONE);
 }
 
 /***************************************************************************/
@@ -243,7 +196,7 @@ char *Rlist2String(Rlist *list, char *sep)
 
 /***************************************************************************/
 
-int Signal2Int(char *s)
+int SignalFromString(const char *s)
 {
     int i = 0;
     Item *ip, *names = SplitString(CF_SIGNALRANGE, ',');
@@ -297,91 +250,75 @@ int Signal2Int(char *s)
 
 }
 
-static const char *REPORT_LEVEL_TYPES[] = { "inform", "verbose", "error", "log", NULL };
-
-enum cfreport String2ReportLevel(char *s)
+ContextScope ContextScopeFromString(const char *scope_str)
 {
-    return FindTypeInArray(REPORT_LEVEL_TYPES, s, cf_noreport, cf_noreport);
+    static const char *CONTEXT_SCOPES[] = { "namespace", "bundle" };
+    return FindTypeInArray(CONTEXT_SCOPES, scope_str, CONTEXT_SCOPE_NAMESPACE, CONTEXT_SCOPE_NONE);
 }
 
-static const char *LINK_TYPES[] = { "symlink", "hardlink", "relative", "absolute", NULL };
-
-enum cflinktype String2LinkType(char *s)
+FileLinkType FileLinkTypeFromString(const char *s)
 {
-    return FindTypeInArray(LINK_TYPES, s, cfa_symlink, cfa_symlink);
+    static const char *LINK_TYPES[] = { "symlink", "hardlink", "relative", "absolute", NULL };
+
+    return FindTypeInArray(LINK_TYPES, s, FILE_LINK_TYPE_SYMLINK, FILE_LINK_TYPE_SYMLINK);
 }
 
-static const char *FILE_COMPARISON_TYPES[] =
-{ "atime", "mtime", "ctime", "digest", "hash", "binary", "exists", NULL };
-
-enum cfcomparison String2Comparison(char *s)
+FileComparator FileComparatorFromString(const char *s)
 {
-    return FindTypeInArray(FILE_COMPARISON_TYPES, s, cfa_nocomparison, cfa_nocomparison);
+    static const char *FILE_COMPARISON_TYPES[] =
+    { "atime", "mtime", "ctime", "digest", "hash", "binary", "exists", NULL };
+
+    return FindTypeInArray(FILE_COMPARISON_TYPES, s, FILE_COMPARATOR_NONE, FILE_COMPARATOR_NONE);
 }
 
-static const char *REPRESENTATION_TYPES[] = 
-{ "url", "web", "file", "db", "literal", "image", "portal", NULL };
-
-enum representations String2Representation(char *s)
+static const char *datatype_strings[] =
 {
-    return FindTypeInArray(REPRESENTATION_TYPES, s, cfk_none, cfk_none);
-}
+    [DATA_TYPE_STRING] = "string",
+    [DATA_TYPE_INT] = "int",
+    [DATA_TYPE_REAL] = "real",
+    [DATA_TYPE_STRING_LIST] = "slist",
+    [DATA_TYPE_INT_LIST] = "ilist",
+    [DATA_TYPE_REAL_LIST] = "rlist",
+    [DATA_TYPE_OPTION] = "option",
+    [DATA_TYPE_OPTION_LIST] = "olist",
+    [DATA_TYPE_BODY] = "body",
+    [DATA_TYPE_BUNDLE] = "bundle",
+    [DATA_TYPE_CONTEXT] = "context",
+    [DATA_TYPE_CONTEXT_LIST] = "clist",
+    [DATA_TYPE_INT_RANGE] = "irange",
+    [DATA_TYPE_REAL_RANGE] = "rrange",
+    [DATA_TYPE_COUNTER] = "counter",
+    [DATA_TYPE_NONE] = "none"
+};
 
-/****************************************************************************/
-
-enum cfsbundle Type2Cfs(char *name)
+DataType DataTypeFromString(const char *name)
 {
-    int i;
-
-    for (i = 0; i < (int) cfs_nobtype; i++)
+    for (int i = 0; i < DATA_TYPE_NONE; i++)
     {
-        if (name && (strcmp(CF_REMACCESS_SUBTYPES[i].subtype, name) == 0))
+        if (strcmp(datatype_strings[i], name) == 0)
         {
-            break;
+            return i;
         }
     }
 
-    return (enum cfsbundle) i;
+    return DATA_TYPE_NONE;
 }
 
-/****************************************************************************/
-
-DataType Typename2Datatype(char *name)
-/* convert abstract data type names: int, ilist etc */
+const char *DataTypeToString(DataType type)
 {
-    int i;
-
-    CfDebug("typename2type(%s)\n", name);
-
-    for (i = 0; i < (int) DATA_TYPE_NONE; i++)
-    {
-        if (name && (strcmp(CF_DATATYPES[i], name) == 0))
-        {
-            break;
-        }
-    }
-
-    return (DataType) i;
+    assert(type < DATA_TYPE_NONE);
+    return datatype_strings[type];
 }
 
-/****************************************************************************/
-
-const char *AgentTypeToString(AgentType agent_type)
-{
-    return CF_AGENTTYPES[agent_type];
-}
-
-/****************************************************************************/
-
-DataType GetControlDatatype(const char *varname, const BodySyntax *bp)
+DataType ConstraintSyntaxGetDataType(const ConstraintSyntax *body_syntax, const char *lval)
 {
     int i = 0;
 
-    for (i = 0; bp[i].range != NULL; i++)
+    for (i = 0; body_syntax[i].lval != NULL; i++)
     {
-        if (varname && (strcmp(bp[i].lval, varname) == 0))
+        if (lval && (strcmp(body_syntax[i].lval, lval) == 0))
         {
-            return bp[i].dtype;
+            return body_syntax[i].dtype;
         }
     }
 
@@ -390,7 +327,7 @@ DataType GetControlDatatype(const char *varname, const BodySyntax *bp)
 
 /****************************************************************************/
 
-int GetBoolean(const char *s)
+bool BooleanFromString(const char *s)
 {
     Item *list = SplitString(CF_BOOL, ','), *ip;
     int count = 0;
@@ -419,7 +356,7 @@ int GetBoolean(const char *s)
 
 /****************************************************************************/
 
-long Str2Int(const char *s)
+long IntFromString(const char *s)
 {
     long a = CF_NOINT;
     char c = 'X';
@@ -450,11 +387,11 @@ long Str2Int(const char *s)
     {
         if (THIS_AGENT_TYPE == AGENT_TYPE_COMMON)
         {
-            CfOut(cf_inform, "", " !! Error reading assumed integer value \"%s\" => \"%s\" (found remainder \"%s\")\n",
-                  s, "non-value", remainder);
+            Log(LOG_LEVEL_INFO, "Error reading assumed integer value '%s' => 'non-value', found remainder '%s'",
+                  s, remainder);
             if (strchr(s, '$'))
             {
-                CfOut(cf_inform, "", " !! The variable might not yet be expandable - not necessarily an error");
+                Log(LOG_LEVEL_INFO, "The variable might not yet be expandable - not necessarily an error");
             }
         }
     }
@@ -483,7 +420,7 @@ long Str2Int(const char *s)
         case '%':
             if ((a < 0) || (a > 100))
             {
-                CfOut(cf_error, "", "Percentage out of range (%ld)", a);
+                Log(LOG_LEVEL_ERR, "Percentage out of range (%ld)", a);
                 return CF_NOINT;
             }
             else
@@ -510,10 +447,16 @@ static const long DAYS[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
 static int GetMonthLength(int month, int year)
 {
-    /* FIXME: really? */
     if ((month == 1) && (year % 4 == 0))
     {
-        return 29;
+        if ((year % 100 == 0) && (year % 400 != 0))
+        {
+           return DAYS[month];
+        }
+        else
+        {
+           return 29;
+        }
     }
     else
     {
@@ -521,27 +464,36 @@ static int GetMonthLength(int month, int year)
     }
 }
 
-long TimeAbs2Int(char *s)
+long TimeAbs2Int(const char *s)
 {
     time_t cftime;
-    int i;
     char mon[4], h[3], m[3];
     long month = 0, day = 0, hour = 0, min = 0, year = 0;
+    struct tm tm;
 
     if (s == NULL)
     {
         return CF_NOINT;
     }
 
-    year = Str2Int(VYEAR);
+    year = IntFromString(VYEAR);
 
     if (strstr(s, ":"))         /* Hr:Min */
     {
         sscanf(s, "%2[^:]:%2[^:]:", h, m);
         month = Month2Int(VMONTH);
-        day = Str2Int(VDAY);
-        hour = Str2Int(h);
-        min = Str2Int(m);
+        day = IntFromString(VDAY);
+        hour = IntFromString(h);
+        min = IntFromString(m);
+
+        tm.tm_year = year - 1900;
+        tm.tm_mon = month - 1;
+        tm.tm_mday = day; 
+        tm.tm_hour = hour; 
+        tm.tm_min = min; 
+        tm.tm_sec = 0;
+        tm.tm_isdst = -1;
+        cftime = mktime(&tm);
     }
     else                        /* date Month */
     {
@@ -554,24 +506,16 @@ long TimeAbs2Int(char *s)
             /* Wrapped around */
             year--;
         }
+        tm.tm_year = year - 1900;
+        tm.tm_mon = month - 1;
+        tm.tm_mday = day; 
+        tm.tm_hour = 0; 
+        tm.tm_min = 0; 
+        tm.tm_sec = 0;
+        tm.tm_isdst = -1;
+        cftime = mktime(&tm);
     }
 
-    CfDebug("(%s)\n%ld=%s,%ld=%s,%ld,%ld,%ld\n", s, year, VYEAR, month, VMONTH, day, hour, min);
-
-    cftime = 0;
-    cftime += min * 60;
-    cftime += hour * 3600;
-    cftime += (day - 1) * 24 * 3600;
-    cftime += 24 * 3600 * ((year - 1970) / 4);  /* Leap years */
-
-    for (i = 0; i < month - 1; i++)
-    {
-        cftime += GetMonthLength(i, year) * 24 * 3600;
-    }
-
-    cftime += (year - 1970) * 365 * 24 * 3600;
-
-    CfDebug("Time %s CORRESPONDS %s\n", s, cf_ctime(&cftime));
     return (long) cftime;
 }
 
@@ -588,7 +532,7 @@ long Months2Seconds(int m)
     }
 
     this_month = Month2Int(VMONTH);
-    year = Str2Int(VYEAR);
+    year = IntFromString(VYEAR);
 
     for (i = 0; i < m; i++)
     {
@@ -608,16 +552,16 @@ long Months2Seconds(int m)
 
 /*********************************************************************/
 
-static const char *INTERVAL_TYPES[] = { "hourly", "daily", NULL };
-
-enum cfinterval Str2Interval(char *string)
+Interval IntervalFromString(const char *string)
 {
-    return FindTypeInArray(INTERVAL_TYPES, string, cfa_nointerval, cfa_nointerval);
+    static const char *INTERVAL_TYPES[] = { "hourly", "daily", NULL };
+
+    return FindTypeInArray(INTERVAL_TYPES, string, INTERVAL_NONE, INTERVAL_NONE);
 }
 
 /*********************************************************************/
 
-int Day2Number(char *datestring)
+int Day2Number(const char *datestring)
 {
     int i = 0;
 
@@ -634,66 +578,27 @@ int Day2Number(char *datestring)
 
 /****************************************************************************/
 
-void UtcShiftInterval(time_t t, char *out, int outSz)
-/* 00 - 06, 
-   06 - 12, 
-   12 - 18, 
-   18 - 24*/
+bool DoubleFromString(const char *s, double *value_out)
 {
-    char buf[CF_MAXVARSIZE];
-    int hr = 0, fromHr = 0, toHr = 0;
+    static const double NO_DOUBLE = -123.45;
 
-    cf_strtimestamp_utc(t, buf);
-
-    sscanf(buf + 11, "%d", &hr);
-    buf[11] = '\0';
-
-    if (hr < 6)
-    {
-        fromHr = 0;
-        toHr = 6;
-    }
-    else if (hr < 12)
-    {
-        fromHr = 6;
-        toHr = 12;
-    }
-    else if (hr < 18)
-    {
-        fromHr = 12;
-        toHr = 18;
-    }
-    else
-    {
-        fromHr = 18;
-        toHr = 24;
-    }
-
-    snprintf(out, outSz, "%s %02d-%02d", buf, fromHr, toHr);
-}
-
-/****************************************************************************/
-
-double Str2Double(const char *s)
-{
-    double a = CF_NODOUBLE;
+    double a = NO_DOUBLE;
     char remainder[CF_BUFSIZE];
-    char output[CF_BUFSIZE];
     char c = 'X';
 
     if (s == NULL)
     {
-        return CF_NODOUBLE;
+        return false;
     }
 
     remainder[0] = '\0';
 
     sscanf(s, "%lf%c%s", &a, &c, remainder);
 
-    if ((a == CF_NODOUBLE) || (!IsSpace(remainder)))
+    if ((a == NO_DOUBLE) || (!IsSpace(remainder)))
     {
-        snprintf(output, CF_BUFSIZE, "Error reading assumed real value %s (anomalous remainder %s)\n", s, remainder);
-        ReportError(output);
+        Log(LOG_LEVEL_ERR, "Reading assumed real value '%s', anomalous remainder '%s'", s, remainder);
+        return false;
     }
     else
     {
@@ -720,8 +625,8 @@ double Str2Double(const char *s)
         case '%':
             if ((a < 0) || (a > 100))
             {
-                CfOut(cf_error, "", "Percentage out of range (%.2lf)", a);
-                return CF_NOINT;
+                Log(LOG_LEVEL_ERR, "Percentage out of range (%.2lf)", a);
+                return false;
             }
             else
             {
@@ -738,12 +643,16 @@ double Str2Double(const char *s)
         }
     }
 
-    return a;
+    *value_out = a;
+    return true;
 }
 
 /****************************************************************************/
 
-void IntRange2Int(char *intrange, long *min, long *max, const Promise *pp)
+/**
+ * @return true if successful
+ */
+bool IntegerRangeFromString(const char *intrange, long *min_out, long *max_out)
 {
     Item *split;
     long lmax = CF_LOWINIT, lmin = CF_HIGHINIT;
@@ -752,9 +661,9 @@ void IntRange2Int(char *intrange, long *min, long *max, const Promise *pp)
 
     if (intrange == NULL)
     {
-        *min = CF_NOINT;
-        *max = CF_NOINT;
-        return;
+        *min_out = CF_NOINT;
+        *max_out = CF_NOINT;
+        return true;
     }
 
     split = SplitString(intrange, ',');
@@ -774,67 +683,80 @@ void IntRange2Int(char *intrange, long *min, long *max, const Promise *pp)
 
     if ((lmin == CF_HIGHINIT) || (lmax == CF_LOWINIT))
     {
-        PromiseRef(cf_error, pp);
-        FatalError("Could not make sense of integer range [%s]", intrange);
+        return false;
     }
 
-    *min = lmin;
-    *max = lmax;
+    *min_out = lmin;
+    *max_out = lmax;
+    return true;
 }
 
-static const char *ACL_METHOD_TYPES[] = { "append", "overwrite", NULL };
-
-enum cf_acl_method Str2AclMethod(char *string)
+AclMethod AclMethodFromString(const char *string)
 {
-    return FindTypeInArray(ACL_METHOD_TYPES, string, cfacl_nomethod, cfacl_nomethod);
+    static const char *ACL_METHOD_TYPES[] = { "append", "overwrite", NULL };
+
+    return FindTypeInArray(ACL_METHOD_TYPES, string, ACL_METHOD_NONE, ACL_METHOD_NONE);
 }
 
-static const char *ACL_TYPES[]= { "generic", "posix", "ntfs", NULL };
-
-enum cf_acl_type Str2AclType(char *string)
+AclType AclTypeFromString(const char *string)
 {
-    return FindTypeInArray(ACL_TYPES, string, cfacl_notype, cfacl_notype);
+    static const char *ACL_TYPES[]= { "generic", "posix", "ntfs", NULL };
+
+    return FindTypeInArray(ACL_TYPES, string, ACL_TYPE_NONE, ACL_TYPE_NONE);
 }
 
-static const char *ACL_INHERIT_TYPES[5] = { "nochange", "specify", "parent", "clear", NULL };
-
-enum cf_acl_inherit Str2AclInherit(char *string)
+/* For the deprecated attribute acl_directory_inherit. */
+AclDefault AclInheritanceFromString(const char *string)
 {
-    return FindTypeInArray(ACL_INHERIT_TYPES, string, cfacl_noinherit, cfacl_noinherit);
+    static const char *ACL_INHERIT_TYPES[5] = { "nochange", "specify", "parent", "clear", NULL };
+
+    return FindTypeInArray(ACL_INHERIT_TYPES, string, ACL_DEFAULT_NONE, ACL_DEFAULT_NONE);
 }
 
-static const char *SERVICE_POLICY_TYPES[5] = { "start", "stop", "disable", "restart", NULL };
-
-enum cf_srv_policy Str2ServicePolicy(char *string)
+AclDefault AclDefaultFromString(const char *string)
 {
-    return FindTypeInArray(SERVICE_POLICY_TYPES, string, cfsrv_start, cfsrv_start);
+    static const char *ACL_DEFAULT_TYPES[5] = { "nochange", "specify", "access", "clear", NULL };
+
+    return FindTypeInArray(ACL_DEFAULT_TYPES, string, ACL_DEFAULT_NONE, ACL_DEFAULT_NONE);
 }
 
-char *Dtype2Str(DataType dtype)
+AclInherit AclInheritFromString(const char *string)
 {
-    switch (dtype)
+    char *start, *end;
+    char *options = CF_BOOL ",nochange";
+    int i;
+    int size;
+
+    if (string == NULL)
     {
-    case DATA_TYPE_STRING:
-        return "s";
-    case DATA_TYPE_STRING_LIST:
-        return "sl";
-    case DATA_TYPE_INT:
-        return "i";
-    case DATA_TYPE_INT_LIST:
-        return "il";
-    case DATA_TYPE_REAL:
-        return "r";
-    case DATA_TYPE_REAL_LIST:
-        return "rl";
-    case DATA_TYPE_OPTION:
-        return "m";
-    case DATA_TYPE_OPTION_LIST:
-        return "ml";
-    default:
-        return "D?";
+        return ACL_INHERIT_NOCHANGE;
     }
+
+    start = options;
+    size = strlen(string);
+    for (i = 0;; i++)
+    {
+        end = strchr(start, ',');
+        if (end == NULL)
+        {
+            break;
+        }
+        if (size == end - start && strncmp(string, start, end - start) == 0)
+        {
+            // Even i is true, odd i is false (from CF_BOOL).
+            return (i & 1) ? ACL_INHERIT_FALSE : ACL_INHERIT_TRUE;
+        }
+        start = end + 1;
+    }
+    return ACL_INHERIT_NOCHANGE;
 }
 
+ServicePolicy ServicePolicyFromString(const char *string)
+{
+    static const char *SERVICE_POLICY_TYPES[] = { "start", "stop", "disable", "restart", "reload", NULL };
+
+    return FindTypeInArray(SERVICE_POLICY_TYPES, string, SERVICE_POLICY_START, SERVICE_POLICY_START);
+}
 
 const char *DataTypeShortToType(char *short_type)
 {
@@ -883,18 +805,7 @@ const char *DataTypeShortToType(char *short_type)
     return "unknown type";
 }
 
-/*********************************************************************/
-/* Level                                                             */
-/*********************************************************************/
-
-int Month2Int(char *string)
-{
-    return MonthLen2Int(string, MAX_MONTH_NAME);
-}
-
-/*************************************************************/
-
-int MonthLen2Int(char *string, int len)
+int Month2Int(const char *string)
 {
     int i;
 
@@ -925,14 +836,14 @@ void TimeToDateStr(time_t t, char *outStr, int outStrSz)
     char month[CF_SMALLBUF], day[CF_SMALLBUF], year[CF_SMALLBUF];
     char tmp[CF_SMALLBUF];
 
-    snprintf(tmp, sizeof(tmp), "%s", cf_ctime(&t));
+    snprintf(tmp, sizeof(tmp), "%s", ctime(&t));
     sscanf(tmp, "%*s %5s %3s %*s %5s", month, day, year);
     snprintf(outStr, outStrSz, "%s %s %s", day, month, year);
 }
 
 /*********************************************************************/
 
-const char *GetArg0(const char *execstr)
+const char *CommandArg0(const char *execstr)
 /** 
  * WARNING: Not thread-safe.
  **/
@@ -967,7 +878,7 @@ const char *GetArg0(const char *execstr)
 
 /*************************************************************/
 
-void CommPrefix(char *execstr, char *comm)
+void CommandPrefix(char *execstr, char *comm)
 {
     char *sp;
 
@@ -988,58 +899,6 @@ void CommPrefix(char *execstr, char *comm)
     strncpy(comm, sp, 15);
 }
 
-/*************************************************************/
-
-int NonEmptyLine(char *line)
-{
-    char *sp;
-
-    for (sp = line; *sp != '\0'; sp++)
-    {
-        if (!isspace((int) *sp))
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/*************************************************************/
-
-char *Item2String(Item *ip)
-{
-    Item *currItem;
-    int stringSz = 0;
-    char *buf;
-
-    // compute required buffer size
-    for (currItem = ip; currItem != NULL; currItem = currItem->next)
-    {
-        stringSz += strlen(currItem->name);
-        stringSz++;             // newline space
-    }
-
-    // we automatically get \0-termination because we are not appending a \n after the last item
-
-    buf = xcalloc(1, stringSz);
-
-    // do the copy
-    for (currItem = ip; currItem != NULL; currItem = currItem->next)
-    {
-        strcat(buf, currItem->name);
-
-        if (currItem->next != NULL)     // no newline after last item
-        {
-            strcat(buf, "\n");
-        }
-    }
-
-    return buf;
-}
-
-/*******************************************************************/
-
 static int IsSpace(char *remainder)
 {
     char *sp;
@@ -1057,25 +916,19 @@ static int IsSpace(char *remainder)
 
 /*******************************************************************/
 
-int IsRealNumber(char *s)
+bool IsRealNumber(const char *s)
 {
-    double a = CF_NODOUBLE;
+    static const double NO_DOUBLE = -123.45;
+    double a = NO_DOUBLE;
 
     sscanf(s, "%lf", &a);
 
-    if (a == CF_NODOUBLE)
+    if (a == NO_DOUBLE)
     {
         return false;
     }
 
     return true;
-}
-
-static const char *MENU_TYPES[] = { "delta", "full", "relay", "collect_call", NULL };
-
-enum cfd_menu String2Menu(const char *s)
-{
-    return FindTypeInArray(MENU_TYPES, s, cfd_menu_error, cfd_menu_error);
 }
 
 /*******************************************************************/
@@ -1220,11 +1073,11 @@ uid_t Str2Uid(char *uidbuff, char *usercopy, const Promise *pp)
         {
             if ((pw = getpwnam(ip->name)) == NULL)
             {
-                CfOut(cf_inform, "", " !! Unknown user in promise \'%s\'\n", ip->name);
+                Log(LOG_LEVEL_INFO, "Unknown user in promise '%s'", ip->name);
 
                 if (pp != NULL)
                 {
-                    PromiseRef(cf_inform, pp);
+                    PromiseRef(LOG_LEVEL_INFO, pp);
                 }
 
                 uid = CF_UNKNOWN_OWNER; /* signal user not found */
@@ -1257,7 +1110,7 @@ uid_t Str2Uid(char *uidbuff, char *usercopy, const Promise *pp)
         }
         else if ((pw = getpwnam(uidbuff)) == NULL)
         {
-            CfOut(cf_inform, "", " !! Unknown user %s in promise\n", uidbuff);
+            Log(LOG_LEVEL_INFO, "Unknown user '%s' in promise", uidbuff);
             uid = CF_UNKNOWN_OWNER;     /* signal user not found */
 
             if (usercopy != NULL)
@@ -1294,11 +1147,11 @@ gid_t Str2Gid(char *gidbuff, char *groupcopy, const Promise *pp)
         }
         else if ((gr = getgrnam(gidbuff)) == NULL)
         {
-            CfOut(cf_inform, "", " !! Unknown group \'%s\' in promise\n", gidbuff);
+            Log(LOG_LEVEL_INFO, "Unknown group '%s' in promise", gidbuff);
 
             if (pp)
             {
-                PromiseRef(cf_inform, pp);
+                PromiseRef(LOG_LEVEL_INFO, pp);
             }
 
             gid = CF_UNKNOWN_GROUP;

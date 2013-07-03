@@ -3,13 +3,12 @@
 
 #include "conversion.h"
 
-#include <setjmp.h>
-#include <cmockery.h>
+#include "test.h"
 
 static const char *lo_alphabet = "abcdefghijklmnopqrstuvwxyz";
 static const char *hi_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-static void test_mix_case_tolower(void **state)
+static void test_mix_case_tolower(void)
 {
     char str[] = "aBcD";
     ToLowerStrInplace(str);
@@ -17,7 +16,7 @@ static void test_mix_case_tolower(void **state)
     assert_string_equal(str, "abcd");
 }
 
-static void test_empty_tolower(void **state)
+static void test_empty_tolower(void)
 {
     char str[] = "";
     ToLowerStrInplace(str);
@@ -25,7 +24,7 @@ static void test_empty_tolower(void **state)
     assert_string_equal(str, "");
 }
 
-static void test_weird_chars_tolower(void **state)
+static void test_weird_chars_tolower(void)
 {
     static const char *weirdstuff = "1345\0xff%$#@!";
 
@@ -36,7 +35,7 @@ static void test_weird_chars_tolower(void **state)
     assert_string_equal(weirdstuff_copy_lowercased, weirdstuff);
 }
 
-static void test_alphabet_tolower(void **state)
+static void test_alphabet_tolower(void)
 {
     char lo_alphabet_lowercased[CF_MAXVARSIZE];
     strncpy(lo_alphabet_lowercased, lo_alphabet, CF_MAXVARSIZE);
@@ -45,7 +44,7 @@ static void test_alphabet_tolower(void **state)
     assert_string_equal(lo_alphabet_lowercased, lo_alphabet);
 }
 
-static void test_hi_alphabet_tolower(void **state)
+static void test_hi_alphabet_tolower(void)
 {
     char hi_alphabet_lowercased[CF_MAXVARSIZE];
     strncpy(hi_alphabet_lowercased, hi_alphabet, CF_MAXVARSIZE);
@@ -54,7 +53,7 @@ static void test_hi_alphabet_tolower(void **state)
     assert_string_equal(hi_alphabet_lowercased, lo_alphabet);
 }
 
-static void test_inplace_tolower(void **state)
+static void test_inplace_tolower(void)
 {
     char abc[] = "abc";
     char def[] = "def";
@@ -66,21 +65,21 @@ static void test_inplace_tolower(void **state)
     assert_string_equal(def, "def");
 }
 
-static void test_mix_case_toupper(void **state)
+static void test_mix_case_toupper(void)
 {
     char str[] = "aBcD";
     ToUpperStrInplace(str);
     assert_string_equal(str, "ABCD");
 }
 
-static void test_empty_toupper(void **state)
+static void test_empty_toupper(void)
 {
     char str[] = "";
     ToUpperStrInplace(str);
     assert_string_equal(str, "");
 }
 
-static void test_weird_chars_toupper(void **state)
+static void test_weird_chars_toupper(void)
 {
     static const char *weirdstuff = "1345\0xff%$#@!";
 
@@ -91,7 +90,7 @@ static void test_weird_chars_toupper(void **state)
     assert_string_equal(weirdstuff_copy_uppercased, weirdstuff);
 }
 
-static void test_alphabet_toupper(void **state)
+static void test_alphabet_toupper(void)
 {
     char lo_alphabet_uppercased[CF_MAXVARSIZE];
     strncpy(lo_alphabet_uppercased, lo_alphabet, CF_MAXVARSIZE);
@@ -100,7 +99,7 @@ static void test_alphabet_toupper(void **state)
     assert_string_equal(lo_alphabet_uppercased, hi_alphabet);
 }
 
-static void test_hi_alphabet_toupper(void **state)
+static void test_hi_alphabet_toupper(void)
 {
     char hi_alphabet_uppercased[CF_MAXVARSIZE];
     strncpy(hi_alphabet_uppercased, hi_alphabet, CF_MAXVARSIZE);
@@ -109,7 +108,7 @@ static void test_hi_alphabet_toupper(void **state)
     assert_string_equal(hi_alphabet_uppercased, hi_alphabet);
 }
 
-static void test_inplace_toupper(void **state)
+static void test_inplace_toupper(void)
 {
     char abc[] = "abc";
     char def[] = "def";
@@ -121,7 +120,7 @@ static void test_inplace_toupper(void **state)
     assert_string_equal(def, "DEF");
 }
 
-static void test_long_search(void **state)
+static void test_long_search(void)
 {
     char *ns = SearchAndReplace("abc", "abcabc", "test");
 
@@ -129,7 +128,7 @@ static void test_long_search(void **state)
     free(ns);
 }
 
-static void test_replace_empty_pattern(void **state)
+static void test_replace_empty_pattern(void)
 {
     char *ns = SearchAndReplace("foobarbaz", "", "abc");
 
@@ -137,7 +136,7 @@ static void test_replace_empty_pattern(void **state)
     free(ns);
 }
 
-static void test_replace_empty_replacement(void **state)
+static void test_replace_empty_replacement(void)
 {
     char *ns = SearchAndReplace("foobarbaz", "a", "");
 
@@ -145,7 +144,7 @@ static void test_replace_empty_replacement(void **state)
     free(ns);
 }
 
-static void test_replace_eq_size(void **state)
+static void test_replace_eq_size(void)
 {
     char *new_string = SearchAndReplace("sasza szedl sucha szosa", "sz", "xx");
 
@@ -153,7 +152,7 @@ static void test_replace_eq_size(void **state)
     free(new_string);
 }
 
-static void test_replace_more_size(void **state)
+static void test_replace_more_size(void)
 {
     char *new_string = SearchAndReplace("sasza szedl sucha szosa", "sz", "xxx");
 
@@ -161,7 +160,7 @@ static void test_replace_more_size(void **state)
     free(new_string);
 }
 
-static void test_replace_less_size(void **state)
+static void test_replace_less_size(void)
 {
     char *new_string = SearchAndReplace("sasza szedl sucha szosa", "sz", "x");
 
@@ -169,7 +168,7 @@ static void test_replace_less_size(void **state)
     free(new_string);
 }
 
-static void test_no_replace(void **state)
+static void test_no_replace(void)
 {
     char *new_string = SearchAndReplace("sasza szedl sucha szosa",
                                         "no_such_pattern", "x");
@@ -178,7 +177,7 @@ static void test_no_replace(void **state)
     free(new_string);
 }
 
-static void test_concatenate(void **state)
+static void test_concatenate(void)
 {
     char *new_string = StringConcatenate(2, "snookie", "sitch");
     assert_string_equal(new_string, "snookiesitch");
@@ -200,7 +199,7 @@ static void test_concatenate(void **state)
     assert_false(new_string);
 }
 
-static void test_substring_overshoot(void **state)
+static void test_substring_overshoot(void)
 {
     char *new_string = StringSubstring("abcdef", 6, 0, 10);
 
@@ -208,7 +207,7 @@ static void test_substring_overshoot(void **state)
     free(new_string);
 }
 
-static void test_substring_positive(void **state)
+static void test_substring_positive(void)
 {
     char *new_string = StringSubstring("abcdef", 6, 2, 3);
 
@@ -216,7 +215,7 @@ static void test_substring_positive(void **state)
     free(new_string);
 }
 
-static void test_substring_negative_length(void **state)
+static void test_substring_negative_length(void)
 {
     char *new_string = StringSubstring("abcdef", 6, 2, -1);
 
@@ -224,7 +223,7 @@ static void test_substring_negative_length(void **state)
     free(new_string);
 }
 
-static void test_substring_negative(void **state)
+static void test_substring_negative(void)
 {
     char *new_string = StringSubstring("abcdef", 6, -3, -1);
 
@@ -232,30 +231,30 @@ static void test_substring_negative(void **state)
     free(new_string);
 }
 
-static void test_substring_evil(void **state)
+static void test_substring_evil(void)
 {
     char *new_string = StringSubstring("abcdef", 6, 4, -4);
 
     assert_int_equal(new_string, NULL);
 }
 
-static void test_string_to_long(void **state)
+static void test_string_to_long(void)
 {
     assert_int_equal(1234567, StringToLong("1234567"));
 }
 
-static void test_string_from_long(void **state)
+static void test_string_from_long(void)
 {
     assert_string_equal("123456789", StringFromLong(123456789));
     assert_string_equal("-123456789", StringFromLong(-123456789));
 }
 
-static void test_string_to_double(void **state)
+static void test_string_to_double(void)
 {
     assert_true(1234.1234 == StringToDouble("1234.1234"));
 }
 
-static void test_safe_compare(void **state)
+static void test_safe_compare(void)
 {
     assert_true(StringSafeCompare(NULL, NULL) == 0);
     assert_true(StringSafeCompare(NULL, "a") != 0);
@@ -264,7 +263,7 @@ static void test_safe_compare(void **state)
     assert_true(StringSafeCompare("a", "b") != 0);
 }
 
-static void test_safe_equal(void **state)
+static void test_safe_equal(void)
 {
     assert_true(StringSafeEqual(NULL, NULL));
     assert_false(StringSafeEqual("a", NULL));
@@ -273,7 +272,7 @@ static void test_safe_equal(void **state)
     assert_true(StringSafeEqual("a", "a"));
 }
 
-static void test_match(void **state)
+static void test_match(void)
 {
     assert_true(StringMatch("^a.*$", "abc"));
     assert_true(StringMatch("a", "a"));
@@ -282,7 +281,7 @@ static void test_match(void **state)
 }
 
 
-static void test_match_full(void **state)
+static void test_match_full(void)
 {
     assert_true(StringMatchFull("^a.*$", "abc"));
     assert_true(StringMatchFull("a", "a"));
@@ -290,7 +289,7 @@ static void test_match_full(void **state)
     assert_false(StringMatchFull("^a.*$", "bac"));
 }
 
-static void test_encode_base64(void **state)
+static void test_encode_base64(void)
 {
     {
         char *res = StringEncodeBase64("", 0);
@@ -338,7 +337,7 @@ static void test_encode_base64(void **state)
 }
 
 
-static void test_escape_char_copy(void **state)
+static void test_escape_char_copy(void)
 {
     char *in1 = "my test with no escape";
     char *out1 = EscapeCharCopy(in1, '7', '\\');
@@ -366,52 +365,114 @@ static void test_escape_char_copy(void **state)
     free(out5);
 }
 
-static void test_chop_no_spaces(void **state)
+static void test_chop_no_spaces(void)
 {
     char s[] = "abc";
     Chop(s, CF_EXPANDSIZE);
     assert_string_equal("abc", s);
 }
 
-static void test_chop_single_space(void **state)
+static void test_chop_single_space(void)
 {
     char s[] = "abc ";
     Chop(s, CF_EXPANDSIZE);
     assert_string_equal("abc", s);
 }
 
-static void test_chop_two_spaces(void **state)
+static void test_chop_two_spaces(void)
 {
     char s[] = "abc  ";
     Chop(s, CF_EXPANDSIZE);
     assert_string_equal("abc", s);
 }
 
-static void test_chop_empty(void **state)
+static void test_chop_empty(void)
 {
     char s[] = "";
     Chop(s, CF_EXPANDSIZE);
     assert_string_equal("", s);
 }
 
-static void test_chop_empty_single_space(void **state)
+static void test_chop_empty_single_space(void)
 {
     char s[] = " ";
     Chop(s, CF_EXPANDSIZE);
     assert_string_equal("", s);
 }
 
-static void test_chop_empty_two_spaces(void **state)
+static void test_chop_empty_two_spaces(void)
 {
     char s[] = "  ";
     Chop(s, CF_EXPANDSIZE);
     assert_string_equal("", s);
 }
 
+static void test_ends_with(void)
+{
+    assert_true(StringEndsWith("file.json", ".json"));
+    assert_true(StringEndsWith("file.json", "file.json"));
+    assert_false(StringEndsWith(".json", "file"));
+    assert_false(StringEndsWith("a", "aa"));
+}
+
+char *test_stringvformat_sup(const char *s, ...)
+{
+    va_list ap;
+    va_start(ap, s);
+    char *fmted = StringVFormat(s, ap);
+    va_end(ap);
+    return fmted;
+}
+
+static void test_stringvformat(void)
+{
+    char *s = test_stringvformat_sup("%s%d", "abc", 42);
+    assert_string_equal(s, "abc42");
+    free(s);
+}
+
+static void test_stringformat(void)
+{
+    char *s = StringFormat("%d%s%d", 1, "a", 2);
+    assert_string_equal(s, "1a2");
+    free(s);
+}
+
+static void test_stringscanfcapped(void)
+{
+    char buf[20];
+    char sp[30];
+
+    strcpy(sp,"");
+    StringNotMatchingSetCapped(sp,20,"\n",buf);
+    assert_string_equal(buf, "");
+
+    strcpy(sp,"\n");
+    StringNotMatchingSetCapped(sp,20,"\n",buf);
+    assert_string_equal(buf, "");
+
+    strcpy(sp,"\n2345678901234567890abcdefghi");
+    StringNotMatchingSetCapped(sp,20,"\n",buf);
+    assert_string_equal(buf, "");
+
+    strcpy(sp,"12345678901234567890abcdefghi");
+    StringNotMatchingSetCapped(sp,20,"\n",buf);
+    assert_string_equal(buf, "1234567890123456789");
+
+    strcpy(sp,"12345678901234567890abcde\nghi");
+    StringNotMatchingSetCapped(sp,20,"\n",buf);
+    assert_string_equal(buf, "1234567890123456789");
+
+    strcpy(sp,"123456789012345\n7890abcdefghi");
+    StringNotMatchingSetCapped(sp,20,"\n",buf);
+    assert_string_equal(buf, "123456789012345");
+}
+
 int main()
 {
+    PRINT_TEST_BANNER();
     const UnitTest tests[] =
-{
+    {
         unit_test(test_mix_case_tolower),
         unit_test(test_empty_tolower),
         unit_test(test_weird_chars_tolower),
@@ -462,6 +523,13 @@ int main()
         unit_test(test_chop_empty),
         unit_test(test_chop_empty_single_space),
         unit_test(test_chop_empty_two_spaces),
+
+        unit_test(test_ends_with),
+
+        unit_test(test_stringformat),
+        unit_test(test_stringvformat),
+
+        unit_test(test_stringscanfcapped),
     };
 
     return run_tests(tests);
@@ -478,12 +546,6 @@ void __ProgrammingError(const char *file, int lineno, const char *format, ...)
 }
 
 void FatalError(char *s, ...)
-{
-    fail();
-    exit(42);
-}
-
-void CfOut(enum cfreport level, const char *errstr, const char *fmt, ...)
 {
     fail();
     exit(42);

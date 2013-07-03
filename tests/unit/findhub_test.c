@@ -1,8 +1,6 @@
-#include <setjmp.h>
-#include <stdarg.h>
-#include <sys/types.h>
+#include "test.h"
+
 #include <string.h>
-#include "cmockery.h"
 #include "findhub.h"
 
 #include <avahi-client/client.h>
@@ -187,7 +185,7 @@ AvahiClient *avahi_client_new(const AvahiPoll *poll, AvahiClientFlags cf, AvahiC
 int avahi_simple_poll_loop(AvahiSimplePoll *sp)
 {
     AvahiAddress *addr = calloc(1, sizeof(AvahiAddress));
-    AvahiServiceResolver *sr = { 0 };
+    AvahiServiceResolver *sr = { (AvahiServiceResolver*)1 };
     switch(hostcount)
     {
     case 0:
@@ -224,7 +222,7 @@ AvahiServiceBrowser *avahi_service_browser_new(AvahiClient *c, AvahiIfIndex inde
     return browser;
 }
 
-static void test_noHubsFound(void **state)
+static void test_noHubsFound(void)
 {
     List *list = NULL;
     
@@ -236,7 +234,7 @@ static void test_noHubsFound(void **state)
     ListDestroy(&list);
 }
 
-static void test_oneHubFound(void **state)
+static void test_oneHubFound(void)
 {
     List *list = NULL;
 
@@ -246,7 +244,8 @@ static void test_oneHubFound(void **state)
     assert_int_not_equal(list, NULL);
     
     ListIterator *i = NULL;
-    ListIteratorGet(list, &i);
+    i = ListIteratorGet(list);
+    assert_true(i != NULL);
     HostProperties *host = (HostProperties *)ListIteratorData(i);
     
     assert_int_equal(host->Port,5308);
@@ -257,7 +256,7 @@ static void test_oneHubFound(void **state)
     ListDestroy(&list);
 }
 
-static void test_multipleHubsFound(void **state)
+static void test_multipleHubsFound(void)
 {
     List *list = NULL;
 
@@ -267,7 +266,7 @@ static void test_multipleHubsFound(void **state)
     assert_int_not_equal(list, NULL);
     
     ListIterator *i = NULL;
-    ListIteratorGet(list, &i);
+    i = ListIteratorGet(list);
     
     HostProperties *host1 = (HostProperties *)ListIteratorData(i); 
     assert_int_not_equal(ListIteratorNext(i), -1);
@@ -291,7 +290,7 @@ static void test_multipleHubsFound(void **state)
     ListDestroy(&list);
 }
 
-static void test_errorOccurred(void **state)
+static void test_errorOccurred(void)
 {
     List *list = NULL;
 
@@ -302,7 +301,9 @@ static void test_errorOccurred(void **state)
 
 int main()
 {
-    const UnitTest tests[] = {
+    PRINT_TEST_BANNER();
+    const UnitTest tests[] =
+    {
           unit_test(test_noHubsFound),
           unit_test(test_oneHubFound),
           unit_test(test_multipleHubsFound),

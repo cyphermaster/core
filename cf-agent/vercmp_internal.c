@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -26,12 +26,11 @@
 
 #include "files_names.h"
 #include "vercmp_internal.h"
-#include "cfstream.h"
 #include "rlist.h"
 
 static void ParsePackageVersion(char *version, Rlist **num, Rlist **sep);
 
-bool ComparePackageVersionsInternal(const char *v1, const char *v2, enum version_cmp cmp)
+bool ComparePackageVersionsInternal(const char *v1, const char *v2, PackageVersionComparator cmp)
 {
     Rlist *rp_pr, *rp_in;
 
@@ -48,7 +47,7 @@ bool ComparePackageVersionsInternal(const char *v1, const char *v2, enum version
 
 /* If the format of the version string doesn't match, we're already doomed */
 
-    CfOut(cf_verbose, "", " -> Check for compatible versioning model in (%s,%s)\n", v1, v2);
+    Log(LOG_LEVEL_VERBOSE, "Check for compatible versioning model in (%s,%s)", v1, v2);
 
     for (rp_pr = separators_pr, rp_in = separators_in; (rp_pr != NULL) && (rp_in != NULL);
          rp_pr = rp_pr->next, rp_in = rp_in->next)
@@ -68,11 +67,11 @@ bool ComparePackageVersionsInternal(const char *v1, const char *v2, enum version
 
     if (result)
     {
-        CfOut(cf_verbose, "", " -> Verified that versioning models are compatible\n");
+        Log(LOG_LEVEL_VERBOSE, "Verified that versioning models are compatible");
     }
     else
     {
-        CfOut(cf_verbose, "", " !! Versioning models for (%s,%s) were incompatible\n", v1, v2);
+        Log(LOG_LEVEL_VERBOSE, "Versioning models for (%s,%s) were incompatible", v1, v2);
     }
 
     int version_equal = (strcmp(v2, v1) == 0);
@@ -86,20 +85,20 @@ bool ComparePackageVersionsInternal(const char *v1, const char *v2, enum version
 
             switch (cmp)
             {
-            case cfa_eq:
-            case cfa_cmp_none:
+            case PACKAGE_VERSION_COMPARATOR_EQ:
+            case PACKAGE_VERSION_COMPARATOR_NONE:
                 if (version_equal)
                 {
                     version_matched = true;
                 }
                 break;
-            case cfa_neq:
+            case PACKAGE_VERSION_COMPARATOR_NEQ:
                 if (!version_equal)
                 {
                     version_matched = true;
                 }
                 break;
-            case cfa_gt:
+            case PACKAGE_VERSION_COMPARATOR_GT:
                 if (cmp_result < 0)
                 {
                     version_matched = true;
@@ -109,7 +108,7 @@ bool ComparePackageVersionsInternal(const char *v1, const char *v2, enum version
                     break_loop = true;
                 }
                 break;
-            case cfa_lt:
+            case PACKAGE_VERSION_COMPARATOR_LT:
                 if (cmp_result > 0)
                 {
                     version_matched = true;
@@ -119,7 +118,7 @@ bool ComparePackageVersionsInternal(const char *v1, const char *v2, enum version
                     break_loop = true;
                 }
                 break;
-            case cfa_ge:
+            case PACKAGE_VERSION_COMPARATOR_GE:
                 if ((cmp_result < 0) || version_equal)
                 {
                     version_matched = true;
@@ -129,7 +128,7 @@ bool ComparePackageVersionsInternal(const char *v1, const char *v2, enum version
                     break_loop = true;
                 }
                 break;
-            case cfa_le:
+            case PACKAGE_VERSION_COMPARATOR_LE:
                 if ((cmp_result > 0) || version_equal)
                 {
                     version_matched = true;
@@ -153,14 +152,14 @@ bool ComparePackageVersionsInternal(const char *v1, const char *v2, enum version
 
         if (rp_pr != NULL)
         {
-            if ((cmp == cfa_lt) || (cmp == cfa_le))
+            if ((cmp == PACKAGE_VERSION_COMPARATOR_LT) || (cmp == PACKAGE_VERSION_COMPARATOR_LE))
             {
                 version_matched = true;
             }
         }
         if (rp_in != NULL)
         {
-            if ((cmp == cfa_gt) || (cmp == cfa_ge))
+            if ((cmp == PACKAGE_VERSION_COMPARATOR_GT) || (cmp == PACKAGE_VERSION_COMPARATOR_GE))
             {
                 version_matched = true;
             }
@@ -174,11 +173,11 @@ bool ComparePackageVersionsInternal(const char *v1, const char *v2, enum version
 
     if (version_matched)
     {
-        CfOut(cf_verbose, "", " -> Verified version constraint promise kept\n");
+        Log(LOG_LEVEL_VERBOSE, "Verified version constraint promise kept");
     }
     else
     {
-        CfOut(cf_verbose, "", " -> Versions did not match\n");
+        Log(LOG_LEVEL_VERBOSE, "Versions did not match");
     }
 
     return version_matched;
@@ -205,7 +204,7 @@ static void ParsePackageVersion(char *version, Rlist **num, Rlist **sep)
 
         /* Append to end up with left->right (major->minor) comparison */
 
-        RlistAppendScalar(num, numeral, RVAL_TYPE_SCALAR);
+        RlistAppendScalar(num, numeral);
 
         if (*sp == '\0')
         {
@@ -213,6 +212,6 @@ static void ParsePackageVersion(char *version, Rlist **num, Rlist **sep)
         }
 
         sscanf(sp, "%1[^0-9a-zA-Z]", separator);
-        RlistAppendScalar(sep, separator, RVAL_TYPE_SCALAR);
+        RlistAppendScalar(sep, separator);
     }
 }

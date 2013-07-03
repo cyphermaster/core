@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,83 +17,80 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
 
-#include "cf3.defs.h"
 #include "mod_knowledge.h"
 
-static const BodySyntax CF_RELATE_BODY[] =
+#include "syntax.h"
+
+static const ConstraintSyntax association_constraints[] =
 {
-    {"forward_relationship", DATA_TYPE_STRING, "", "Name of forward association between promiser topic and associates"},
-    {"backward_relationship", DATA_TYPE_STRING, "", "Name of backward/inverse association from associates to promiser topic"},
-    {"associates", DATA_TYPE_STRING_LIST, "", "List of associated topics by this forward relationship"},
-    {NULL, DATA_TYPE_NONE, NULL, NULL}
+    ConstraintSyntaxNewString("forward_relationship", "", "Name of forward association between promiser topic and associates", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewString("backward_relationship", "", "Name of backward/inverse association from associates to promiser topic", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("associates", "", "List of associated topics by this forward relationship", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewNull()
 };
 
-static const BodySyntax CF_OCCUR_BODIES[] =
+static const BodySyntax association_body = BodySyntaxNew("association", association_constraints, NULL, SYNTAX_STATUS_REMOVED);
+
+static const ConstraintSyntax topics_constraints[] =
 {
-    {"about_topics", DATA_TYPE_STRING_LIST, "",
-     "List of topics that the document or resource addresses"},    
-    {"represents", DATA_TYPE_STRING_LIST, "",
-     "List of explanations for what relationship this document has to the topics it is about"},    
-    {"representation", DATA_TYPE_OPTION, "literal,url,db,file,web,image,portal",
-     "How to interpret the promiser string e.g. actual data or reference to data"},
-    {NULL, DATA_TYPE_NONE, NULL, NULL}
+    ConstraintSyntaxNewBody("association", &association_body, "Declare associated topics", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("synonyms", "", "A list of words to be treated as equivalents in the defined context", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("generalizations", "", "A list of words to be treated as super-sets for the current topic, used when reasoning", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewNull()
 };
 
-static const BodySyntax CF_TOPICS_BODIES[] =
+static const ConstraintSyntax occurrences_constraints[] =
 {
-    {"association", DATA_TYPE_BODY, CF_RELATE_BODY, "Declare associated topics"},
-    {"synonyms", DATA_TYPE_STRING_LIST, "", "A list of words to be treated as equivalents in the defined context"},
-    {"generalizations", DATA_TYPE_STRING_LIST, "",
-     "A list of words to be treated as super-sets for the current topic, used when reasoning"},
-    {NULL, DATA_TYPE_NONE, NULL, NULL}
+    ConstraintSyntaxNewStringList("about_topics", "", "List of topics that the document or resource addresses", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("represents", "", "List of explanations for what relationship this document has to the topics it is about", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewOption("representation", "literal,url,db,file,web,image,portal", "How to interpret the promiser string e.g. actual data or reference to data", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewNull()
 };
 
-static const BodySyntax CF_THING_BODIES[] =
+static const ConstraintSyntax things_constraints[] =
 {
-    {"synonyms", DATA_TYPE_STRING_LIST, "", "A list of words to be treated as equivalents in the defined context"},
-    {"affects", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"belongs_to", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"causes", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"certainty", DATA_TYPE_OPTION, "certain,uncertain,possible",
-     "Selects the level of certainty for the proposed knowledge, for use in inferential reasoning"},
-    {"determines", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"generalizations", DATA_TYPE_STRING_LIST, "",
-     "A list of words to be treated as super-sets for the current topic, used when reasoning"},
-    {"implements", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"involves", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"is_caused_by", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"is_connected_to", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"is_determined_by", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"is_followed_by", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"is_implemented_by", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"is_located_in", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"is_measured_by", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"is_part_of", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"is_preceded_by", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"measures", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"needs", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"provides", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {"uses", DATA_TYPE_STRING_LIST, "", "Special fixed relation for describing topics that are things"},
-    {NULL, DATA_TYPE_NONE, NULL, NULL}
+    ConstraintSyntaxNewStringList("synonyms", "", "A list of words to be treated as equivalents in the defined context", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("affects", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("belongs_to", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("causes", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewOption("certainty", "certain,uncertain,possible", "Selects the level of certainty for the proposed knowledge, for use in inferential reasoning", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("determines", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("generalizations", "", "A list of words to be treated as super-sets for the current topic, used when reasoning", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("implements", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("involves", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("is_caused_by", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("is_connected_to", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("is_determined_by", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("is_followed_by", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("is_implemented_by", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("is_located_in", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("is_measured_by", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("is_part_of", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("is_preceded_by", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("measures", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("needs", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("provides", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("uses", "", "Special fixed relation for describing topics that are things", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewNull()
 };
 
-static const BodySyntax CF_INFER_BODIES[] =
+static const ConstraintSyntax inferences_constraints[] =
 {
-    {"precedents", DATA_TYPE_STRING_LIST, "", "The foundational vector for a trinary inference"},
-    {"qualifiers", DATA_TYPE_STRING_LIST, "", "The second vector in a trinary inference"},
-    {NULL, DATA_TYPE_NONE, NULL, NULL}
+    ConstraintSyntaxNewStringList("precedents", "", "The foundational vector for a trinary inference", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewStringList("qualifiers", "", "The second vector in a trinary inference", SYNTAX_STATUS_REMOVED),
+    ConstraintSyntaxNewNull()
 };
 
-const SubTypeSyntax CF_KNOWLEDGE_SUBTYPES[] =
+const PromiseTypeSyntax CF_KNOWLEDGE_PROMISE_TYPES[] =
 {
-    {"knowledge", "inferences", CF_INFER_BODIES},
-    {"knowledge", "things", CF_THING_BODIES},
-    {"knowledge", "topics", CF_TOPICS_BODIES},
-    {"knowledge", "occurrences", CF_OCCUR_BODIES},
-    {NULL, NULL, NULL},
+    PromiseTypeSyntaxNew("knowledge", "inferences", inferences_constraints, NULL, SYNTAX_STATUS_REMOVED),
+    PromiseTypeSyntaxNew("knowledge", "things", things_constraints, NULL, SYNTAX_STATUS_REMOVED),
+    PromiseTypeSyntaxNew("knowledge", "topics", topics_constraints, NULL, SYNTAX_STATUS_REMOVED),
+    PromiseTypeSyntaxNew("knowledge", "occurrences", occurrences_constraints, NULL, SYNTAX_STATUS_REMOVED),
+    PromiseTypeSyntaxNewNull()
 };

@@ -10,20 +10,18 @@ body common control
   inputs => { "../../default.cf.sub" };
   bundlesequence  => { default("$(this.promise_filename)") };
   version => "1.0";
-nova_edition::
-  host_licenses_paid => "5";
 }
 
 bundle agent init
 {
 commands:
-  "/bin/mkdir -p $(G.testdir)/from/dir1";
-  "/bin/mkdir -p $(G.testdir)/from/dir2";
-  "/bin/echo 'indir1' > $(G.testdir)/from/dir1/file1"
+  "$(G.mkdir) -p $(G.testdir)/from/dir1";
+  "$(G.mkdir) -p $(G.testdir)/from/dir2";
+  "$(G.echo) 'indir1' > $(G.testdir)/from/dir1/file1"
     contain => in_shell;
-  "/bin/echo 'indir2' > $(G.testdir)/from/dir2/file2"
+  "$(G.echo) 'indir2' > $(G.testdir)/from/dir2/file2"
     contain => in_shell;
-  "/bin/ln -s dir1 link",
+  "$(G.ln) -s dir1 link",
     contain => in_dir("$(G.testdir)/from");
 }
 

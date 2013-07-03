@@ -1,7 +1,7 @@
 /*
-   Copyright (C) Cfengine AS
+   Copyright (C) CFEngine AS
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -17,7 +17,7 @@
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
@@ -25,42 +25,47 @@
 #include "cf-serverd-functions.h"
 
 #include "server_transform.h"
-#include "cfstream.h"
-#include "logging.h"
 
 int main(int argc, char *argv[])
 {
+    EvalContext *ctx = EvalContextNew();
     GenericAgentConfig *config = CheckOpts(argc, argv);
+    GenericAgentConfigApply(ctx, config);
 
-    ReportContext *report_context = OpenReports(config->agent_type);
-    GenericAgentDiscoverContext(config, report_context);
+    GenericAgentDiscoverContext(ctx, config);
 
     Policy *policy = NULL;
-    if (GenericAgentCheckPolicy(config, report_context, false))
+    if (GenericAgentCheckPolicy(ctx, config, false))
     {
-        policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+        policy = GenericAgentLoadPolicy(ctx, config);
     }
     else if (config->tty_interactive)
     {
-        FatalError("CFEngine was not able to get confirmation of promises from cf-promises, please verify input file\n");
+        exit(EXIT_FAILURE);
     }
     else
     {
-        CfOut(cf_error, "", "CFEngine was not able to get confirmation of promises from cf-promises, so going to failsafe\n");
-        HardClass("failsafe_fallback");
-        GenericAgentConfigSetInputFile(config, "failsafe.cf");
-        policy = GenericAgentLoadPolicy(config->agent_type, config, report_context);
+        Log(LOG_LEVEL_ERR, "CFEngine was not able to get confirmation of promises from cf-promises, so going to failsafe");
+        EvalContextHeapAddHard(ctx, "failsafe_fallback");
+        GenericAgentConfigSetInputFile(config, GetWorkDir(), "failsafe.cf");
+        policy = GenericAgentLoadPolicy(ctx, config);
     }
 
-    CheckLicenses();
+    CheckForPolicyHub(ctx);
 
     ThisAgentInit();
-    KeepPromises(policy, config, report_context);
+    KeepPromises(ctx, policy, config);
     Summarize();
 
-    StartServer(policy, config, report_context);
+    Log(LOG_LEVEL_NOTICE, "Server is starting...");
 
-    ReportContextDestroy(report_context);
+    StartServer(ctx, &policy, config);
+
+    Log(LOG_LEVEL_NOTICE, "Cleaning up and exiting...");
+
     GenericAgentConfigDestroy(config);
+    PolicyDestroy(policy);
+    EvalContextDestroy(ctx);
+
     return 0;
 }

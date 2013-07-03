@@ -29,6 +29,7 @@
 #include "cf3.defs.h"
 
 #include "rlist.h"
+#include "item_lib.h"
 
 typedef bool (*LessFn)(void *lhs, void *rhs, void *ctx);
 typedef void * (*GetNextElementFn)(void *element);
@@ -143,22 +144,22 @@ static void *Sort(void *list, LessFn less, GetNextElementFn next, PutNextElement
 
 /* Item* callbacks */
 
-static bool ItemNameLess(void *lhs, void *rhs, void *ctx)
+static bool ItemNameLess(void *lhs, void *rhs, ARG_UNUSED void *ctx)
 {
     return strcmp(((Item*)lhs)->name, ((Item*)rhs)->name) < 0;
 }
 
-static bool ItemClassesLess(void *lhs, void *rhs, void *ctx)
+static bool ItemClassesLess(void *lhs, void *rhs, ARG_UNUSED void *ctx)
 {
     return strcmp(((Item*)lhs)->classes, ((Item*)rhs)->classes) < 0;
 }
 
-static bool ItemCounterMore(void *lhs, void *rhs, void *ctx)
+static bool ItemCounterMore(void *lhs, void *rhs, ARG_UNUSED void *ctx)
 {
     return ((Item*)lhs)->counter > ((Item*)rhs)->counter;
 }
 
-static bool ItemTimeMore(void *lhs, void *rhs, void *ctx)
+static bool ItemTimeMore(void *lhs, void *rhs, ARG_UNUSED void *ctx)
 {
     return ((Item*)lhs)->time > ((Item*)rhs)->time;
 }
@@ -206,7 +207,7 @@ static bool RlistCustomItemLess(void *lhs_, void *rhs_, void *ctx)
     return (*cmp)(lhs->item, rhs->item);
 }
 
-static bool RlistItemLess(void *lhs, void *rhs, void *ctx)
+static bool RlistItemLess(void *lhs, void *rhs, ARG_UNUSED void *ctx)
 {
     return strcmp(((Rlist*)lhs)->item, ((Rlist*)rhs)->item) < 0;
 }

@@ -1,209 +1,269 @@
-/* 
+/*
+   Copyright (C) CFEngine AS
 
-   Copyright (C) Cfengine AS
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
 
-   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
    Free Software Foundation; version 3.
-   
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
-  You should have received a copy of the GNU General Public License  
+
+  You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
   To the extent this program is licensed as part of the Enterprise
-  versions of Cfengine, the applicable Commerical Open Source License
+  versions of CFEngine, the applicable Commerical Open Source License
   (COSL) may apply to this file if you as a licensee so wish it. See
   included file COSL.txt.
 */
+
+#include "platform.h"
 
 #include "files_copy.h"
 
 #include "files_names.h"
 #include "files_interfaces.h"
 #include "instrumentation.h"
-#include "cfstream.h"
+#include "policy.h"
+#include "files_lib.h"
+#include "string_lib.h"
+#include "acl_tools.h"
 
-/*****************************************************************************/
-/* Local low level                                                           */
-/*****************************************************************************/
-
-void CheckForFileHoles(struct stat *sstat, Promise *pp)
-/* Need a transparent way of getting this into CopyReg() */
-/* Use a public member in struct Image                   */
+/*
+ * Copy data jumping over areas filled by '\0', so files automatically become sparse if possible.
+ */
+static bool CopyData(const char *source, int sd, const char *destination, int dd, char *buf, size_t buf_size)
 {
-    if (pp == NULL)
-    {
-        return;
-    }
-
-#if !defined(__MINGW32__)
-    if (sstat->st_size > sstat->st_blocks * DEV_BSIZE)
-#else
-# ifdef HAVE_ST_BLOCKS
-    if (sstat->st_size > sstat->st_blocks * DEV_BSIZE)
-# else
-    if (sstat->st_size > ST_NBLOCKS((*sstat)) * DEV_BSIZE)
-# endif
-#endif
-    {
-        pp->makeholes = 1;      /* must have a hole to get checksum right */
-    }
-
-    pp->makeholes = 0;
-}
-
-/*********************************************************************/
-
-bool CopyRegularFileDisk(const char *source, const char *destination, bool make_holes)
-{
-    int sd, dd, buf_size;
-    char *buf, *cp;
-    int n_read, *intp;
-    long n_read_total = 0;
-    int last_write_made_hole = 0;
-
-    if ((sd = open(source, O_RDONLY | O_BINARY)) == -1)
-    {
-        CfOut(cf_inform, "open", "Can't copy %s!\n", source);
-        unlink(destination);
-        return false;
-    }
-    /*
-     * We need to stat the file in order to get the right source permissions.
-     */
-    struct stat statbuf;
-
-    if (cfstat(source, &statbuf) == -1)
-    {
-        CfOut(cf_inform, "stat", "Can't copy %s!\n", source);
-        unlink(destination);
-        return false;
-    }
-
-    unlink(destination);                /* To avoid link attacks */
-
-    if ((dd = open(destination, O_WRONLY | O_CREAT | O_TRUNC | O_EXCL | O_BINARY, statbuf.st_mode)) == -1)
-    {
-        close(sd);
-        unlink(destination);
-        return false;
-    }
-
-    buf_size = ST_BLKSIZE(dstat);
-    buf = xmalloc(buf_size + sizeof(int));
+    off_t n_read_total = 0;
 
     while (true)
     {
-        if ((n_read = read(sd, buf, buf_size)) == -1)
+        ssize_t n_read = read(sd, buf, buf_size);
+
+        if (n_read == -1)
         {
             if (errno == EINTR)
             {
                 continue;
             }
 
-            close(sd);
-            close(dd);
-            free(buf);
+            Log(LOG_LEVEL_ERR, "Unable to read source file while copying '%s' to '%s'. (read: %s)", source, destination, GetErrorStr());
             return false;
         }
 
         if (n_read == 0)
         {
-            break;
+            /*
+             * As the tail of file may contain of bytes '\0' (and hence
+             * lseek(2)ed on destination instead of being written), do a
+             * ftruncate(2) here to ensure the whole file is written to the
+             * disc.
+             */
+            if (ftruncate(dd, n_read_total) < 0)
+            {
+                Log(LOG_LEVEL_ERR, "Copy failed (no space?) while copying '%s' to '%s'. (ftruncate: %s)", source, destination, GetErrorStr());
+                return false;
+            }
+
+            return true;
         }
 
         n_read_total += n_read;
 
-        intp = 0;
+        /* Copy/seek */
 
-        if (make_holes)
+        void *cur = buf;
+        void *end = buf + n_read;
+
+        while (cur < end)
         {
-            buf[n_read] = 1;    /* Sentinel to stop loop.  */
-
-            /* Find first non-zero *word*, or the word with the sentinel.  */
-
-            intp = (int *) buf;
-
-            while (*intp++ == 0)
+            void *skip_span = MemSpan(cur, 0, end - cur);
+            if (skip_span > cur)
             {
-            }
-
-            /* Find the first non-zero *byte*, or the sentinel.  */
-
-            cp = (char *) (intp - 1);
-
-            while (*cp++ == 0)
-            {
-            }
-
-            /* If we found the sentinel, the whole input block was zero,
-               and we can make a hole.  */
-
-            if (cp > buf + n_read)
-            {
-                /* Make a hole.  */
-                if (lseek(dd, (off_t) n_read, SEEK_CUR) < 0L)
+                if (lseek(dd, skip_span - cur, SEEK_CUR) < 0)
                 {
-                    CfOut(cf_error, "lseek", "Copy failed (no space?) while doing %s to %s\n", source, destination);
-                    free(buf);
-                    unlink(destination);
-                    close(dd);
-                    close(sd);
+                    Log(LOG_LEVEL_ERR, "Failed while copying '%s' to '%s' (no space?). (lseek: %s)", source, destination, GetErrorStr());
                     return false;
                 }
-                last_write_made_hole = 1;
-            }
-            else
-            {
-                /* Clear to indicate that a normal write is needed. */
-                intp = 0;
-            }
-        }
 
-        if (intp == 0)
-        {
-            if (FullWrite(dd, buf, n_read) < 0)
-            {
-                CfOut(cf_error, "", "Copy failed (no space?) while doing %s to %s\n", source, destination);
-                close(sd);
-                close(dd);
-                free(buf);
-                unlink(destination);
-                return false;
+                cur = skip_span;
             }
-            last_write_made_hole = 0;
+
+
+            void *copy_span = MemSpanInverse(cur, 0, end - cur);
+            if (copy_span > cur)
+            {
+                if (FullWrite(dd, cur, copy_span - cur) < 0)
+                {
+                    Log(LOG_LEVEL_ERR, "Failed while copying '%s' to '%s' (no space?). (write: %s)", source, destination, GetErrorStr());
+                    return false;
+                }
+
+                cur = copy_span;
+            }
         }
     }
+}
 
-    /* If the file ends with a `hole', something needs to be written at
-       the end.  Otherwise the kernel would truncate the file at the end
-       of the last write operation.  */
+bool CopyRegularFileDisk(const char *source, const char *destination)
+{
+    int sd;
+    int dd = 0;
+    char *buf = 0;
+    bool result = false;
 
-    if (last_write_made_hole)
+    if ((sd = open(source, O_RDONLY | O_BINARY)) == -1)
     {
-        /* Write a null character and truncate it again.  */
+        Log(LOG_LEVEL_INFO, "Can't copy '%s'. (open: %s)", source, GetErrorStr());
+        goto end;
+    }
+    /*
+     * We need to stat the file in order to get the right source permissions.
+     */
+    struct stat statbuf;
 
-        if ((FullWrite(dd, "", 1) < 0) || (ftruncate(dd, n_read_total) < 0))
+    if (stat(source, &statbuf) == -1)
+    {
+        Log(LOG_LEVEL_INFO, "Can't copy '%s'. (stat: %s)", source, GetErrorStr());
+        goto end;
+    }
+
+    unlink(destination);                /* To avoid link attacks */
+
+    if ((dd = open(destination, O_WRONLY | O_CREAT | O_TRUNC | O_EXCL | O_BINARY, statbuf.st_mode)) == -1)
+    {
+        Log(LOG_LEVEL_INFO, "Unable to open destination file while copying '%s' to '%s'. (open: %s)", source, destination, GetErrorStr());
+        goto end;
+    }
+
+    int buf_size = ST_BLKSIZE(dstat);
+    buf = xmalloc(buf_size);
+
+    result = CopyData(source, sd, destination, dd, buf, buf_size);
+    if (!result)
+    {
+        goto end;
+    }
+
+end:
+    if (buf)
+    {
+        free(buf);
+    }
+    if (dd)
+    {
+        close(dd);
+    }
+    if (!result)
+    {
+        unlink(destination);
+    }
+    close(sd);
+    return result;
+}
+
+bool CopyFilePermissionsDisk(const char *source, const char *destination)
+{
+    struct stat statbuf;
+
+    if (stat(source, &statbuf) == -1)
+    {
+        Log(LOG_LEVEL_INFO, "Can't copy permissions '%s'. (stat: %s)", source, GetErrorStr());
+        return false;
+    }
+
+    if (chmod(destination, statbuf.st_mode) != 0)
+    {
+        Log(LOG_LEVEL_INFO, "Can't copy permissions '%s'. (chmod: %s)", source, GetErrorStr());
+        return false;
+    }
+
+    if (chown(destination, statbuf.st_uid, statbuf.st_gid) != 0)
+    {
+        Log(LOG_LEVEL_INFO, "Can't copy permissions '%s'. (chown: %s)", source, GetErrorStr());
+        return false;
+    }
+
+    if (!CopyFileExtendedAttributesDisk(source, destination))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool CopyFileExtendedAttributesDisk(const char *source, const char *destination)
+{
+#if defined(WITH_XATTR)
+    // Extended attributes include both POSIX ACLs and SELinux contexts.
+    ssize_t attr_raw_names_size;
+    char attr_raw_names[CF_BUFSIZE];
+
+    attr_raw_names_size = listxattr(source, attr_raw_names, sizeof(attr_raw_names));
+    if (attr_raw_names_size < 0)
+    {
+        if (errno == ENOTSUP || errno == ENODATA)
         {
-            CfOut(cf_error, "write", "cfengine: full_write or ftruncate error in CopyReg\n");
-            free(buf);
-            unlink(destination);
-            close(sd);
-            close(dd);
+            return true;
+        }
+        else
+        {
+            Log(LOG_LEVEL_INFO, "Can't copy extended attributes from '%s' to '%s'. (listxattr: %s)",
+                source, destination, GetErrorStr());
             return false;
         }
     }
 
-    close(sd);
-    close(dd);
+    int pos;
+    for (pos = 0; pos < attr_raw_names_size;)
+    {
+        const char *current = attr_raw_names + pos;
+        pos += strlen(current) + 1;
 
-    free(buf);
+        char data[CF_BUFSIZE];
+        int datasize = getxattr(source, current, data, sizeof(data));
+        if (datasize < 0)
+        {
+            if (errno == ENOTSUP)
+            {
+                continue;
+            }
+            else
+            {
+                Log(LOG_LEVEL_INFO, "Can't copy extended attributes from '%s' to '%s'. (getxattr: %s: %s)",
+                    source, destination, GetErrorStr(), current);
+                return false;
+            }
+        }
+
+        int ret = setxattr(destination, current, data, datasize, 0);
+        if (ret < 0)
+        {
+            if (errno == ENOTSUP)
+            {
+                continue;
+            }
+            else
+            {
+                Log(LOG_LEVEL_INFO, "Can't copy extended attributes from '%s' to '%s'. (setxattr: %s: %s)",
+                    source, destination, GetErrorStr(), current);
+                return false;
+            }
+        }
+    }
+
+#else // !WITH_XATTR
+    // ACLs are included in extended attributes, but fall back to CopyACLs if xattr is not available.
+    if (!CopyACLs(source, destination))
+    {
+        return false;
+    }
+#endif
+
     return true;
 }
